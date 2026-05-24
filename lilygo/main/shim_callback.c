@@ -32,6 +32,7 @@ static const char *TAG = "nh-shim";
 #define NH_MAP_W 80
 #define NH_MAP_H 21
 static char     map_ch[NH_MAP_H][NH_MAP_W];
+static uint8_t  map_clr[NH_MAP_H][NH_MAP_W];   /* NetHack CLR_* index */
 static int      cursor_x = 0;
 static int      cursor_y = 0;
 static int      view_x   = 0;     /* leftmost column of the LCD viewport */
@@ -92,6 +93,32 @@ static struct {
     bool    selected[MENU_MAX_ITEMS];         /* PICK_ANY toggle state */
 } g_menu;
 
+/* NetHack CLR_* index -> RGB565 (pre-byte-swapped for the ST7789 wire
+ * format).  NO_COLOR (=8) and out-of-range fall back to white via the
+ * lookup in render_map. */
+static const uint16_t nh_palette[16] = {
+    [0]  = TDECK_COLOR_RGB565(0x55, 0x55, 0x55), /* CLR_BLACK -> dark grey
+                                                    so it's visible on a
+                                                    black background      */
+    [1]  = TDECK_COLOR_RGB565(0xC0, 0x00, 0x00), /* CLR_RED                */
+    [2]  = TDECK_COLOR_RGB565(0x00, 0x80, 0x00), /* CLR_GREEN              */
+    [3]  = TDECK_COLOR_RGB565(0xA5, 0x2A, 0x2A), /* CLR_BROWN              */
+    [4]  = TDECK_COLOR_RGB565(0x40, 0x60, 0xFF), /* CLR_BLUE -- lifted off
+                                                    pure 00x00xFF so it's
+                                                    readable on black     */
+    [5]  = TDECK_COLOR_RGB565(0xA0, 0x00, 0xA0), /* CLR_MAGENTA            */
+    [6]  = TDECK_COLOR_RGB565(0x00, 0xA0, 0xA0), /* CLR_CYAN               */
+    [7]  = TDECK_COLOR_RGB565(0xC0, 0xC0, 0xC0), /* CLR_GRAY               */
+    [8]  = TDECK_COLOR_RGB565(0xFF, 0xFF, 0xFF), /* NO_COLOR -> default    */
+    [9]  = TDECK_COLOR_RGB565(0xFF, 0x80, 0x00), /* CLR_ORANGE             */
+    [10] = TDECK_COLOR_RGB565(0x00, 0xFF, 0x00), /* CLR_BRIGHT_GREEN       */
+    [11] = TDECK_COLOR_RGB565(0xFF, 0xFF, 0x00), /* CLR_YELLOW             */
+    [12] = TDECK_COLOR_RGB565(0x60, 0x90, 0xFF), /* CLR_BRIGHT_BLUE        */
+    [13] = TDECK_COLOR_RGB565(0xFF, 0x60, 0xFF), /* CLR_BRIGHT_MAGENTA     */
+    [14] = TDECK_COLOR_RGB565(0x60, 0xFF, 0xFF), /* CLR_BRIGHT_CYAN        */
+    [15] = TDECK_COLOR_RGB565(0xFF, 0xFF, 0xFF), /* CLR_WHITE              */
+};
+
 static void
 recenter_view_on_cursor(void)
 {
@@ -113,7 +140,8 @@ render_map(void)
         for (int col = 0; col < VIEW_COLS; col++) {
             int mx = view_x + col;
             char c = map_ch[row][mx];
-            uint16_t fg = TDECK_COLOR_WHITE;
+            uint8_t clr = map_clr[row][mx];
+            uint16_t fg = (clr < 16) ? nh_palette[clr] : TDECK_COLOR_WHITE;
             uint16_t bg = TDECK_COLOR_BLACK;
             /* Highlight cursor / player position in green. */
             if (row == cursor_y && mx == cursor_x) {
@@ -310,7 +338,8 @@ handle_print_glyph(va_list *ap_in)
 
     int ch = nh_glyph_info_char(gi);
     if (ch < 0x20 || ch > 0x7e) ch = '?';
-    map_ch[y][x] = (char) ch;
+    map_ch[y][x]  = (char) ch;
+    map_clr[y][x] = (uint8_t) nh_glyph_info_color(gi);
     map_dirty = true;
 }
 
@@ -335,6 +364,7 @@ handle_clear(va_list *ap_in)
     int window = va_arg(ap, int);
     if (window != win_map) return;
     memset(map_ch, 0, sizeof(map_ch));
+    memset(map_clr, 0, sizeof(map_clr));
     map_dirty = true;
 }
 
@@ -435,12 +465,6 @@ handle_add_menu(va_list *ap_in)
     } else {
         g_menu.accels[i] = 0;
     }
-
-    ESP_LOGI(TAG, "  menu[%d]: ch=%d ident=%p sel=%d accel='%c' (0x%02x) str=\"%.20s\"",
-             i, ch, ident, (int) g_menu.selectable[i],
-             g_menu.accels[i] ? g_menu.accels[i] : '.',
-             (unsigned char) g_menu.accels[i],
-             str ? str : "");
 }
 
 /* shim_end_menu(window, prompt) fmt "vis" */
@@ -639,29 +663,22 @@ handle_select_menu(va_list *ap_in, void *ret_ptr)
 
     render_menu();
 
-    ESP_LOGI(TAG, "menu: how=%d count=%d", g_menu.how, g_menu.count);
-
     int result = 0;            /* count of items selected; -1 for cancel */
     for (;;) {
         int key = tdeck_keyboard_getchar(portMAX_DELAY);
         if (key < 0) continue;
-        ESP_LOGI(TAG, "menu key=0x%02x ('%c')", key,
-                 (key >= 0x20 && key < 0x7f) ? key : '?');
 
         /* Scroll j/k -- but for PICK_ONE/PICK_ANY these letters are also
          * valid accelerators, so prefer accelerator lookup first. */
         bool used_as_accel = false;
         if (g_menu.how != PICK_NONE) {
             int idx = menu_find_by_accel(key);
-            ESP_LOGI(TAG, "menu accel match: idx=%d", idx);
             if (idx >= 0) {
                 used_as_accel = true;
                 if (g_menu.how == PICK_ONE) {
                     /* Single pick: mark + finish. */
                     g_menu.selected[idx] = true;
                     result = emit_menu_selection(menu_list_pp);
-                    ESP_LOGI(TAG, "menu emit: result=%d list=%p",
-                             result, menu_list_pp ? *menu_list_pp : NULL);
                     break;
                 } else {
                     /* PICK_ANY: toggle and keep going. */

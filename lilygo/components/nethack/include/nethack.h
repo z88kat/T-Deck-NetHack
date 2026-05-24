@@ -38,6 +38,10 @@ void shim_graphics_set_callback(shim_callback_t cb);
  * Returns ' ' if gi is NULL. */
 int nh_glyph_info_char(const void *glyphinfo);
 
+/* Returns NetHack's classic 16-colour index (CLR_BLACK=0..CLR_WHITE=15)
+ * for this cell.  Returns 15 (CLR_WHITE) if gi is NULL or out of range. */
+int nh_glyph_info_color(const void *glyphinfo);
+
 /* Look up an extended-command name (e.g. "pray", "chat") in NetHack's
  * extcmdlist[].  Returns the command's index for shim_get_ext_cmd, or -1
  * if not found.  Names are case-sensitive lower-case. */

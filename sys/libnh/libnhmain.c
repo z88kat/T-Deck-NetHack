@@ -1374,6 +1374,21 @@ nh_glyph_info_char(const void *gi)
     return g->ttychar;
 }
 
+/* Phase 3c colour helper: returns NetHack's classic 16-colour index for
+ * this cell (CLR_BLACK..CLR_WHITE).  Returns CLR_WHITE if gi is null or
+ * the cell has no colour assigned. */
+int
+nh_glyph_info_color(const void *gi)
+{
+    const glyph_info *g = (const glyph_info *) gi;
+    if (!g)
+        return CLR_WHITE;
+    int c = g->gm.sym.color;
+    if (c < 0 || c >= CLR_MAX)
+        return CLR_WHITE;
+    return c;
+}
+
 /* Phase 3c helper: look up an extended command by its textual name (e.g.
  * "pray", "chat") and return its index in extcmdlist[], or -1 on miss. */
 int
