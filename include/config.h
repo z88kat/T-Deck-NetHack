@@ -229,7 +229,7 @@
 #define WIZARD_NAME "wizard" /* value is ignored if SYSCF is enabled */
 #endif
 
-#ifndef SYSCF
+#if !defined(SYSCF) && !defined(NOSYSCF)
 #define SYSCF                /* use a global configuration */
 #define SYSCF_FILE "sysconf" /* global configuration is in a file */
 #endif
@@ -739,6 +739,17 @@ typedef unsigned char uchar;
 #ifndef DUMPLOG_MSG_COUNT
 #define DUMPLOG_MSG_COUNT   50
 #endif /* DUMPLOG_MSG_COUNT */
+#endif
+
+/* NH_EXTRAM places a global into the ESP-IDF "external RAM" BSS section,
+ * which the linker fragment in tdeck-nethack/components/nethack/linker.lf
+ * (via scheme `extram_bss -> extern_ram`) routes to PSRAM.  Used for the
+ * big instance_globals_* structs / mons[] / objects[] that would otherwise
+ * blow the ESP32-S3's 320 KB internal DRAM. */
+#ifdef CROSS_TO_ESP32S3
+#define NH_EXTRAM __attribute__((section(".ext_ram.bss")))
+#else
+#define NH_EXTRAM /* nothing */
 #endif
 
 #endif /* CONFIG_H */

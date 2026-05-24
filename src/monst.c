@@ -66,7 +66,7 @@ static struct permonst mons_init[NUMMONS + 1] = {
 
 void monst_globals_init(void); /* in hack.h but we're using config.h */
 
-struct permonst mons[SIZE(mons_init)];
+NH_EXTRAM struct permonst mons[SIZE(mons_init)];
 
 void
 monst_globals_init(void)

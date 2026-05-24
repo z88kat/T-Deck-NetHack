@@ -59,7 +59,7 @@ ifdef CROSS_TO_ESP32S3
 # without override and would otherwise win.
 CROSS=1
 BUILD_TARGET_LUA=1
-override HACKDIR=/littlefs/nethack
+override HACKDIR=/nethack
 override PREFIX=
 WANT_LIBNH=1
 override TARGET = esp32s3

@@ -28,7 +28,7 @@
 # IMPORTED static libraries and link them into your application.
 
 PREFIX=$(wildcard ~)/nethack-esp32s3
-HACKDIR=/littlefs/nethack
+HACKDIR=/nethack
 SHELLDIR=
 INSTDIR=$(HACKDIR)
 VARDIR=/sdcard/nethack

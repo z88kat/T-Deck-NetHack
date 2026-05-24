@@ -12,6 +12,7 @@
  * Only built when CROSS_TO_ESP32S3 is set (see top-level Makefile).
  */
 
+#include <dirent.h>
 #include <errno.h>
 #include <pwd.h>
 #include <stdarg.h>
@@ -21,6 +22,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+/* WEAK qualifier so ESP-IDF VFS strong definitions win when both are
+ * present.  The point of these stubs is not to do anything useful at run
+ * time -- it is to prevent the static linker from pulling libnosys.a's
+ * dir.o/getcwd.o/chmod.o (which would multi-def against esp_vfs.a). */
+#define NH_WEAK __attribute__((weak))
 
 /*--------------------------------------------------------------------
  * Process control (newlib has none of these on Xtensa)
@@ -177,18 +184,75 @@ umask(mode_t mask)
     return (mode_t) 0022;
 }
 
-int
-access(const char *path, int mode)
+/* ESP-IDF VFS provides access(), chmod(), the dir functions, and getcwd().
+ * We provide WEAK fallback stubs ONLY to prevent the linker from going
+ * looking in libnosys.a/dir.o (which would multi-def against vfs.c).  Once
+ * VFS is linked, its strong symbols replace these. */
+
+NH_WEAK int
+chmod(const char *path, mode_t mode)
 {
-    /* ESP-IDF VFS does not implement access().  Approximate with stat:
-     * if the file exists at all, claim it's accessible.  R_OK / W_OK /
-     * X_OK distinctions are meaningless without a real permission
-     * model. */
-    struct stat st;
+    (void) path;
     (void) mode;
-    if (stat(path, &st) == 0)
-        return 0;
-    errno = ENOENT;
+    return 0;
+}
+
+NH_WEAK char *
+getcwd(char *buf, size_t size)
+{
+    if (buf && size > 0)
+        buf[0] = '\0';
+    return buf;
+}
+
+NH_WEAK DIR *
+opendir(const char *name)
+{
+    (void) name;
+    errno = ENOSYS;
+    return NULL;
+}
+
+NH_WEAK int
+closedir(DIR *d)
+{
+    (void) d;
+    return 0;
+}
+
+NH_WEAK struct dirent *
+readdir(DIR *d)
+{
+    (void) d;
+    return NULL;
+}
+
+NH_WEAK void
+rewinddir(DIR *d)
+{
+    (void) d;
+}
+
+NH_WEAK long
+telldir(DIR *d)
+{
+    (void) d;
+    return 0;
+}
+
+NH_WEAK void
+seekdir(DIR *d, long loc)
+{
+    (void) d;
+    (void) loc;
+}
+
+NH_WEAK int
+mkdir(const char *path, mode_t mode)
+{
+    (void) path;
+    (void) mode;
+    errno = ENOSYS;
     return -1;
 }
 
@@ -276,3 +340,11 @@ dosuspend(void)
 {
     return 0;
 }
+
+/* If NetHack ever calls exit() at run time, ESP-IDF's newlib routes it to
+ * `syscall_not_implemented_aborts` which kills the firmware -- annoying
+ * but clear.  We previously stubbed a spin-loop here but newlib's _exit
+ * has a strong definition that multi-def's against ours, and -DSYSCF was
+ * the main exit() trigger we've already eliminated.  Leave newlib's
+ * behaviour in place; if it fires the abort backtrace tells us where to
+ * add an upstream guard. */

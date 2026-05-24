@@ -81,6 +81,35 @@ nhmain(int argc, char *argv[])
 
     early_init(argc, argv);
 
+#if defined(CROSS_TO_ESP32S3) && defined(HACKDIR)
+    /* CHDIR is not defined for the ESP32 cross build (no chdir() in
+     * ESP-IDF VFS), so the normal path-prefix setup in chdirx() never
+     * runs and gf.fqn_prefix[*] stays NULL.  That means dlb_init's
+     * fopen_datafile("nhdat", ..., DATAPREFIX) calls fopen("nhdat") with
+     * no path -- which fails on SPIFFS.  Initialise all relevant
+     * prefixes to HACKDIR with trailing slash so fqname() concatenates
+     * to /nethack/nhdat etc. */
+    {
+        static char nh_hackdir_buf[64];
+        int hlen = (int) Strlen(HACKDIR);
+        Strcpy(nh_hackdir_buf, HACKDIR);
+        if (hlen > 0 && nh_hackdir_buf[hlen - 1] != '/') {
+            nh_hackdir_buf[hlen] = '/';
+            nh_hackdir_buf[hlen + 1] = '\0';
+        }
+        gf.fqn_prefix[HACKPREFIX] = nh_hackdir_buf;
+        gf.fqn_prefix[DATAPREFIX] = nh_hackdir_buf;
+        gf.fqn_prefix[SCOREPREFIX] = nh_hackdir_buf;
+        gf.fqn_prefix[LEVELPREFIX] = nh_hackdir_buf;
+        gf.fqn_prefix[SAVEPREFIX] = nh_hackdir_buf;
+        gf.fqn_prefix[BONESPREFIX] = nh_hackdir_buf;
+        gf.fqn_prefix[LOCKPREFIX] = nh_hackdir_buf;
+        gf.fqn_prefix[TROUBLEPREFIX] = nh_hackdir_buf;
+        gf.fqn_prefix[SYSCONFPREFIX] = nh_hackdir_buf;
+        gf.fqn_prefix[CONFIGPREFIX] = nh_hackdir_buf;
+    }
+#endif
+
     gh.hname = argv[0];
     svh.hackpid = getpid();
     (void) umask(0777 & ~FCMASK);
@@ -267,8 +296,15 @@ nhmain(int argc, char *argv[])
      * (for gl.locknum > 0).
      */
     if (*svp.plname) {
+#ifndef CROSS_TO_ESP32S3
+        /* getlock() touches the playground directory to manage save-file
+         * locks.  On the ESP32-S3 cross build there's no writable
+         * playground yet (LittleFS/SD aren't mounted until Phase 5), so
+         * lock creation always fails and error()s out.  Skip it for now;
+         * the game runs single-player without lock arbitration. */
         getlock();
         program_state.preserve_locks = 0; /* after getlock() */
+#endif
     }
 
     if (*svp.plname && (nhfp = restore_saved_game()) != 0) {

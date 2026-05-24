@@ -422,7 +422,12 @@ ESP32S3_CFLAGS += -Os
 ESP32S3_CFLAGS += -DESP_PLATFORM -DCONFIG_IDF_TARGET_ESP32S3
 ESP32S3_CFLAGS += $(WINCFLAGS)
 ESP32S3_CFLAGS += -I../include -DNOTPARMDECL
-ESP32S3_CFLAGS += -DSYSCF -DSYSCF_FILE=\"/littlefs/nethack/sysconf\" -DSECURE
+# Skip SYSCF -- no sysconf file shipped yet, and assure_syscf_file calls
+# exit() on missing file which translates to abort() in ESP-IDF newlib.
+# -DNOSYSCF skips the unconditional #define SYSCF in include/config.h.
+# When LittleFS is mounted in Phase 5 we can switch this back on.
+ESP32S3_CFLAGS += -DNOSYSCF
+ESP32S3_CFLAGS += -DSECURE
 ESP32S3_CFLAGS += -DNHUUID
 ESP32S3_CFLAGS += -DDLB
 ESP32S3_CFLAGS += -DHACKDIR=\"$(HACKDIR)\"

@@ -25,8 +25,8 @@ static struct objclass obj_init[NUM_OBJECTS + 1] = {
 
 void objects_globals_init(void); /* in hack.h but we're using config.h */
 
-struct objdescr obj_descr[SIZE(obj_descr_init)];
-struct objclass objects[SIZE(obj_init)];
+NH_EXTRAM struct objdescr obj_descr[SIZE(obj_descr_init)];
+NH_EXTRAM struct objclass objects[SIZE(obj_init)];
 
 void
 objects_globals_init(void)

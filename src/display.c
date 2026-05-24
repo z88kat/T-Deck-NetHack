@@ -1668,6 +1668,13 @@ const glyph_info nul_glyphinfo = {
 
 #ifdef TILES_IN_GLYPHMAP
 extern glyph_map glyphmap[MAX_GLYPH]; /* from tile.c */
+#elif defined(CROSS_TO_ESP32S3)
+/* On ESP32-S3 (LilyGo T-Deck) the default initializer puts glyphmap into
+ * .data, blowing the 320 KB DRAM budget by ~200 KB.  reset_glyphmap() is
+ * called from moveloop() before any glyph is rendered, so an uninitialised
+ * .bss array is functionally equivalent.  NH_EXTRAM (see config.h) then
+ * routes the .bss into PSRAM via the linker fragment. */
+NH_EXTRAM glyph_map glyphmap[MAX_GLYPH];
 #else
 glyph_map glyphmap[MAX_GLYPH] = {
     { 0U, { NO_COLOR, 0 },
