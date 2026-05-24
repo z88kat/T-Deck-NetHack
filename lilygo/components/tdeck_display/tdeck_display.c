@@ -12,12 +12,47 @@
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 static const char *TAG = "tdeck_display";
 
 static esp_lcd_panel_io_handle_t s_io = NULL;
 static esp_lcd_panel_handle_t    s_panel = NULL;
+
+/* Synchronisation for SPI transactions.  esp_lcd's draw_bitmap is async:
+ * the function returns the moment the transaction is queued, but the SPI
+ * DMA is still pulling bytes from the caller's buffer.  If the next
+ * putchar call reuses the same stack offset before that DMA is done, the
+ * old transaction reads garbage and the first character of every batch
+ * gets dropped (and the next batch's first character bleeds in where it
+ * landed).
+ *
+ * We register the on_color_trans_done callback (fires from ISR when the
+ * SPI is fully drained) to signal a semaphore.  Every draw call below
+ * waits on the semaphore before returning, so the caller is free to
+ * reuse / pop / overwrite the source buffer immediately. */
+static SemaphoreHandle_t s_trans_done_sem = NULL;
+static bool IRAM_ATTR
+on_trans_done(esp_lcd_panel_io_handle_t io,
+              esp_lcd_panel_io_event_data_t *data, void *user_ctx)
+{
+    (void) io; (void) data; (void) user_ctx;
+    BaseType_t hp_woken = pdFALSE;
+    xSemaphoreGiveFromISR(s_trans_done_sem, &hp_woken);
+    return hp_woken == pdTRUE;
+}
+
+static inline void
+draw_and_wait(int x_start, int y_start, int x_end, int y_end,
+              const uint16_t *pixels)
+{
+    if (!s_panel) return;
+    esp_lcd_panel_draw_bitmap(s_panel, x_start, y_start, x_end, y_end, pixels);
+    if (s_trans_done_sem) {
+        xSemaphoreTake(s_trans_done_sem, portMAX_DELAY);
+    }
+}
 
 /* SPI clock for the panel.  ST7789 specs allow up to ~62.5 MHz; T-Deck
  * traces are short so 40 MHz works reliably.  Drop to 20 MHz if you see
@@ -103,6 +138,18 @@ tdeck_display_init(void)
         return err;
     }
 
+    /* Set up the trans-done semaphore + register the ISR callback that
+     * signals it. */
+    s_trans_done_sem = xSemaphoreCreateBinary();
+    if (!s_trans_done_sem) {
+        ESP_LOGE(TAG, "xSemaphoreCreateBinary failed");
+        return ESP_ERR_NO_MEM;
+    }
+    esp_lcd_panel_io_callbacks_t cbs = {
+        .on_color_trans_done = on_trans_done,
+    };
+    esp_lcd_panel_io_register_event_callbacks(s_io, &cbs, NULL);
+
     /* ST7789 panel driver.  T-Deck's panel is BGR-ordered. */
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = TDECK_LCD_PIN_RST,
@@ -173,8 +220,7 @@ tdeck_display_fill(uint16_t color)
     }
     /* One row at a time so the scratch buffer stays small. */
     for (int y = 0; y < TDECK_LCD_HEIGHT; y++) {
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, TDECK_LCD_WIDTH, y + 1,
-                                  s_line_buf);
+        draw_and_wait(0, y, TDECK_LCD_WIDTH, y + 1, s_line_buf);
     }
 }
 
@@ -183,7 +229,7 @@ tdeck_display_blit(int x, int y, int w, int h, const uint16_t *pixels)
 {
     if (!s_panel || !pixels) return;
     if (w <= 0 || h <= 0) return;
-    esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, pixels);
+    draw_and_wait(x, y, x + w, y + h, pixels);
 }
 
 /* --- Minimal 8x8 font (printable ASCII 0x20..0x7E only) ------------ */
@@ -306,14 +352,18 @@ tdeck_display_putchar(int x, int y, char c, uint16_t fg, uint16_t bg)
         glyph = font_8x8[(unsigned char) c - 0x20];
     }
 
-    uint16_t buf[64];
+    /* Static buffer (not stack) so the SPI DMA's source memory has a
+     * stable address even after putchar returns.  Combined with the
+     * trans-done semaphore inside draw_and_wait, the next caller can't
+     * overwrite the buffer until the SPI is done with it. */
+    static uint16_t buf[64];
     for (int row = 0; row < 8; row++) {
         uint8_t bits = glyph[row];
         for (int col = 0; col < 8; col++) {
             buf[row * 8 + col] = (bits & (0x80 >> col)) ? fg : bg;
         }
     }
-    esp_lcd_panel_draw_bitmap(s_panel, x, y, x + 8, y + 8, buf);
+    draw_and_wait(x, y, x + 8, y + 8, buf);
 }
 
 void
