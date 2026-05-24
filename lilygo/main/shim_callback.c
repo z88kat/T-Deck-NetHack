@@ -19,11 +19,13 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nethack.h"
 #include "tdeck_display.h"
 #include "tdeck_keyboard.h"
+#include "tdeck_sdcard.h"
 
 static const char *TAG = "nh-shim";
 
@@ -801,6 +803,24 @@ nh_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
         handle_select_menu(&ap2, ret_ptr);
         va_end(ap2);
         ret_handled = true;
+    } else if (strcmp(name, "shim_exit_nhwindows") == 0
+               && arg_codes[0] == 's') {
+        /* NetHack calls this just before exit() at end-of-game or
+         * save+quit.  ESP-IDF newlib's _exit is unimplemented and
+         * aborts the firmware, so reboot here instead -- the next boot
+         * picks up the save (if there is one) or shows the intro. */
+        va_list ap2;
+        va_copy(ap2, ap);
+        const char *bye = va_arg(ap2, const char *);
+        va_end(ap2);
+        ESP_LOGI(TAG, "exit_nhwindows: \"%s\" -- rebooting",
+                 bye ? bye : "");
+        tdeck_display_fill(TDECK_COLOR_BLACK);
+        tdeck_display_print(0, 240 / 2 - 4,
+                            bye ? bye : "Be seeing you...",
+                            TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        esp_restart();
     } else if (strcmp(name, "shim_raw_print") == 0
                && arg_codes[0] == 's') {
         /* Show the message on the bottom status line. */
@@ -809,6 +829,34 @@ nh_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
         const char *s = va_arg(ap2, const char *);
         draw_status_line(0, s ? s : "", TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
         va_end(ap2);
+
+        /* Safety net: if NetHack is panicking because the save it just
+         * tried to restore is corrupt, scrub the SD save dir and reboot.
+         * Without this the device gets stuck in a loop (panic -> reboot
+         * -> try restore -> panic).  We lose the save but the game
+         * becomes playable again. */
+        if (s
+            && (strstr(s, "Error reading level file")
+                || strstr(s, "Error restoring old game")
+                || strstr(s, "Cannot open save file"))) {
+            const char *base = tdeck_sdcard_base_path();
+            if (base) {
+                /* Only wipe the save/ subdir we own.  NetHack also writes
+                 * level / lock files at the SD root, but those share the
+                 * card with the user's own files -- scrub conservatively
+                 * and let the save reset clear the dangling references. */
+                char savedir[64];
+                snprintf(savedir, sizeof(savedir), "%s/save", base);
+                ESP_LOGW(TAG, "corrupt save detected (\"%s\") -- wiping %s",
+                         s, savedir);
+                tdeck_display_print(0, 240 - 8,
+                                    "save corrupt - wiping & rebooting",
+                                    TDECK_COLOR_RED, TDECK_COLOR_BLACK);
+                (void) tdeck_sdcard_wipe_dir(savedir);
+                vTaskDelay(pdMS_TO_TICKS(1500));
+                esp_restart();
+            }
+        }
     } else if (strcmp(name, "shim_putstr") == 0
                && arg_codes[0] == 'i' && arg_codes[1] == 'i'
                && arg_codes[2] == 's') {

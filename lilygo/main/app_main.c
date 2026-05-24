@@ -10,7 +10,10 @@
  * profiled.
  */
 
+#include <errno.h>
 #include <inttypes.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #include "esp_chip_info.h"
 #include "esp_heap_caps.h"
@@ -23,6 +26,7 @@
 #include "nethack.h"
 #include "tdeck_display.h"
 #include "tdeck_keyboard.h"
+#include "tdeck_sdcard.h"
 
 static const char *TAG = "app_main";
 
@@ -144,6 +148,25 @@ app_main(void)
     }
 
     mount_nhdat();
+
+    /* Phase 5: try to mount the SD card.  If a card is present and
+     * FAT-formatted, point NetHack's writable prefixes there so saves
+     * survive reboots.  If no card / unformatted / unreadable, log a
+     * warning and continue -- the game will still play, just without
+     * persistence. */
+    if (tdeck_sdcard_mount("/sdcard") == ESP_OK) {
+        /* NetHack's set_savefile_name() on UNIX prefixes the save filename
+         * with "save/" (see src/files.c:1051), so create that subdir on
+         * the card; otherwise create_savefile() fails with ENOENT and the
+         * user sees "Cannot open save file." */
+        if (mkdir("/sdcard/save", 0777) != 0 && errno != EEXIST) {
+            ESP_LOGW(TAG, "mkdir /sdcard/save failed: %s", strerror(errno));
+        }
+        nh_set_savedir("/sdcard");
+        ESP_LOGI(TAG, "saves will persist to /sdcard");
+    } else {
+        ESP_LOGW(TAG, "no SD card -- saves will not persist across reboots");
+    }
 
     /* Pin NetHack to core 1; core 0 stays free for display / radio later. */
     BaseType_t rc = xTaskCreatePinnedToCore(

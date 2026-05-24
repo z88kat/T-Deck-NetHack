@@ -19,4 +19,6 @@ idf_component_register(
         tdeck_display
         # tdeck_keyboard polls the BlackBerry-style QWERTY over I2C
         tdeck_keyboard
+        # tdeck_sdcard mounts the microSD over the shared LCD SPI bus
+        tdeck_sdcard
 )

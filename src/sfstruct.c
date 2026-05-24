@@ -314,7 +314,16 @@ static long floc = 0L;
 staticfn int getidx(int, int);
 
 #if defined(UNIX) || defined(WIN32)
+#if !defined(CROSS_TO_ESP32S3)
+/* USE_BUFFERING enables stdio-buffered writes (fdopen(fd,"w") + fwrite())
+ * on top of the raw POSIX fd that NetHack already opened.  On ESP-IDF
+ * v5.3 with FATFS over SPI SD, fdopen() on a VFS fd doesn't reliably
+ * flush -- the first save came back as a truncated file (restore panics
+ * with "Error reading level file."), the second panics inside bufon().
+ * Fall back to unbuffered write(fd, ...) which goes straight through the
+ * VFS to f_write() in FATFS. */
 #define USE_BUFFERING
+#endif
 #endif
 
 struct restore_info restoreinfo = {

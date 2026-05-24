@@ -97,12 +97,14 @@ tdeck_display_init(void)
         gpio_set_level(TDECK_LCD_PIN_BL, 0);
     }
 
-    /* Init the SPI bus.  MISO is unused for the panel, but the bus needs
-     * to be told. */
+    /* Init the SPI bus.  The panel doesn't use MISO, but the SD card on
+     * the T-Deck shares this same SPI bus (SCK=40, MOSI=41, MISO=38,
+     * separate CS pins), so wire MISO up here so the SD driver can attach
+     * later without re-initialising the bus. */
     spi_bus_config_t bus_cfg = {
         .sclk_io_num = TDECK_LCD_PIN_SCLK,
         .mosi_io_num = TDECK_LCD_PIN_MOSI,
-        .miso_io_num = -1,
+        .miso_io_num = 38,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = TDECK_LCD_TRANS_MAX_BYTES,

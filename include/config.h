@@ -385,8 +385,13 @@
  *
  */
 
-#if defined(UNIX) && !defined(ZLIB_COMP) && !defined(COMPRESS)
-/* path and file name extension for compression program */
+#if defined(UNIX) && !defined(ZLIB_COMP) && !defined(COMPRESS) \
+    && !defined(CROSS_TO_ESP32S3)
+/* path and file name extension for compression program.  The ESP-IDF
+ * cross build has no fork()/exec(), so leave both COMPRESS and ZLIB_COMP
+ * undefined -- nh_compress() will be a no-op and the save file stays
+ * uncompressed on the SD card.  Saves are small (~hundreds of KB);
+ * compression isn't critical. */
 #define COMPRESS "/usr/bin/compress" /* Lempel-Ziv compression */
 #define COMPRESS_EXTENSION ".Z"      /* compress's extension */
 /* An example of one alternative you might want to use: */
@@ -431,8 +436,17 @@
  *      Defining INSURANCE slows down level changes, but allows games that
  *      died due to program or system crashes to be resumed from the point
  *      of the last level change, after running a utility program.
+ *
+ *      Disabled for the ESP32 cross build: INSURANCE causes dorecover()
+ *      to invoke savestateinlock(), which reads the per-game lock file
+ *      (e.g. /sdcard/1lock.0).  Clean save + reboot deletes that file,
+ *      so restore panics with "Cannot open file 1lock.0 (errno 2)".
+ *      We don't need crash recovery -- power loss just loses the
+ *      session, and clean save/restore goes through the savefile path.
  */
+#if !defined(CROSS_TO_ESP32S3)
 #define INSURANCE /* allow crashed game recovery */
+#endif
 
 #if !defined(MACOS9) && !defined(SHIM_GRAPHICS)
 #define CHDIR /* delete if no chdir() available */

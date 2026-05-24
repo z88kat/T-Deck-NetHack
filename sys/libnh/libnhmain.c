@@ -88,9 +88,13 @@ nhmain(int argc, char *argv[])
      * fopen_datafile("nhdat", ..., DATAPREFIX) calls fopen("nhdat") with
      * no path -- which fails on SPIFFS.  Initialise all relevant
      * prefixes to HACKDIR with trailing slash so fqname() concatenates
-     * to /nethack/nhdat etc. */
+     * to /nethack/nhdat etc.  If nh_set_savedir() was called before
+     * nhmain(), the SAVE/LEVEL/LOCK/BONES/TROUBLE/SCORE prefixes are
+     * redirected to that path so writable state lives on the SD card
+     * while read-only data still comes from /nethack (SPIFFS). */
     {
         static char nh_hackdir_buf[64];
+        static char nh_savedir_buf[64];
         int hlen = (int) Strlen(HACKDIR);
         Strcpy(nh_hackdir_buf, HACKDIR);
         if (hlen > 0 && nh_hackdir_buf[hlen - 1] != '/') {
@@ -107,6 +111,24 @@ nhmain(int argc, char *argv[])
         gf.fqn_prefix[TROUBLEPREFIX] = nh_hackdir_buf;
         gf.fqn_prefix[SYSCONFPREFIX] = nh_hackdir_buf;
         gf.fqn_prefix[CONFIGPREFIX] = nh_hackdir_buf;
+
+        extern const char *nh_savedir_override;
+        if (nh_savedir_override && *nh_savedir_override) {
+            int slen = (int) Strlen(nh_savedir_override);
+            if (slen > 0 && slen < (int) sizeof(nh_savedir_buf) - 2) {
+                Strcpy(nh_savedir_buf, nh_savedir_override);
+                if (nh_savedir_buf[slen - 1] != '/') {
+                    nh_savedir_buf[slen] = '/';
+                    nh_savedir_buf[slen + 1] = '\0';
+                }
+                gf.fqn_prefix[SAVEPREFIX]    = nh_savedir_buf;
+                gf.fqn_prefix[LEVELPREFIX]   = nh_savedir_buf;
+                gf.fqn_prefix[BONESPREFIX]   = nh_savedir_buf;
+                gf.fqn_prefix[LOCKPREFIX]    = nh_savedir_buf;
+                gf.fqn_prefix[TROUBLEPREFIX] = nh_savedir_buf;
+                gf.fqn_prefix[SCOREPREFIX]   = nh_savedir_buf;
+            }
+        }
     }
 #endif
 
@@ -1447,6 +1469,21 @@ nh_anything_is_zero(const void *p)
 {
     if (!p) return 1;
     return memcmp(p, &cg.zeroany, sizeof(anything)) == 0 ? 1 : 0;
+}
+
+/* Phase 5: redirect save/level/bones/lock/trouble/score prefixes to a
+ * writable directory (typically the SD-card mount).  Must be called
+ * before nhmain() since the prefixes are baked in during early_init.
+ * Pass NULL or "" to revert to the default (HACKDIR). */
+const char *nh_savedir_override = NULL;
+
+void
+nh_set_savedir(const char *path)
+{
+    /* Store the caller's pointer.  The string must remain valid for the
+     * lifetime of the game (e.g. a string literal or static buffer); the
+     * library doesn't copy it. */
+    nh_savedir_override = path;
 }
 #endif /* CROSS_TO_ESP32S3 */
 

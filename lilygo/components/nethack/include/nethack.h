@@ -31,6 +31,13 @@ typedef void (*shim_callback_t)(const char *name, void *ret_ptr,
 
 void shim_graphics_set_callback(shim_callback_t cb);
 
+/* Redirect save / level / bones / lock / trouble / score files to a
+ * writable directory (e.g. an SD-card mount).  Must be called BEFORE
+ * nhmain() -- the prefixes are baked in during early init.  The string
+ * must outlive the game (use a string literal or static buffer); not
+ * copied.  Pass NULL to keep the default (HACKDIR, read-only on SPIFFS). */
+void nh_set_savedir(const char *path);
+
 /* Helpers for unpacking the per-cell info that shim_print_glyph hands us.
  * The shim sees `glyph_info *` as an opaque void pointer; these accessors
  * live inside libnh.a where the full struct is in scope.  Returns the
