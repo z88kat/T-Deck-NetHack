@@ -43,6 +43,26 @@ int nh_glyph_info_char(const void *glyphinfo);
  * if not found.  Names are case-sensitive lower-case. */
 int nh_lookup_ext_cmd(const char *name);
 
+/* Menu-selection helpers for shim_select_menu.  Allocate a menu_item[]
+ * array of the given length and fill in individual entries by index.
+ * `ident_ptr` is the `const ANY_P *identifier` argument that came in
+ * via shim_add_menu (treat it as an opaque blob the shim cached).  The
+ * returned array is owned by NetHack from the moment select_menu
+ * stores it in *menu_list -- NetHack will free() it itself. */
+void *nh_menu_alloc_list(int count);
+void  nh_menu_set_item(void *list, int idx, const void *ident_ptr, long count);
+
+/* sizeof(anything) -- so the shim can allocate per-item copies of the
+ * identifier blob at add_menu time, before the source goes out of scope
+ * on NetHack's caller stack.  Shim must reserve at least this many
+ * bytes per menu item. */
+int nh_anything_size(void);
+
+/* Returns nonzero if the anything at *p is bitwise zero (NetHack's
+ * `zeroany`).  Items added with a zeroany identifier are headers /
+ * separators and must NOT be assigned an accelerator. */
+int nh_anything_is_zero(const void *p);
+
 #ifdef __cplusplus
 }
 #endif

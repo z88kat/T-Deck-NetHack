@@ -69,14 +69,27 @@ static int win_map    = -1;
  * Letter-driven item selection is a follow-up. */
 #define MENU_MAX_ITEMS    80
 #define MENU_MAX_TEXT     52    /* 320/8 = 40 cols of text + a bit slack */
-#define MENU_VISIBLE_ROWS 27    /* 240/8 = 30 rows, minus title + spacer + hint */
+#define MENU_VISIBLE_ROWS 26    /* 240/8 = 30 rows, minus title + spacer + hint */
+#define MENU_IDENT_MAX    16    /* must be >= nh_anything_size() */
+#define PICK_NONE  0
+#define PICK_ONE   1
+#define PICK_ANY   2
 static struct {
     bool    in_progress;        /* between start_menu and end_menu */
     int     count;
-    int     how;                /* PICK_NONE=0, PICK_ONE=1, PICK_ANY=2 */
+    int     how;                /* PICK_NONE / PICK_ONE / PICK_ANY */
     int     scroll_top;
+    int     next_auto_accel;    /* fallback accel: 'a','b','c',... */
     char    title[MENU_MAX_TEXT];
     char    items[MENU_MAX_ITEMS][MENU_MAX_TEXT];
+    /* Copy of the `anything` bytes NetHack handed us; the original
+     * pointer goes dangling the moment add_menu returns to NetHack. */
+    unsigned char idents[MENU_MAX_ITEMS][MENU_IDENT_MAX];
+    bool    selectable[MENU_MAX_ITEMS];       /* false for headers /
+                                                 separators (zeroany id) */
+    char    accels[MENU_MAX_ITEMS];           /* per-item accelerator,
+                                                 or 0 if non-selectable */
+    bool    selected[MENU_MAX_ITEMS];         /* PICK_ANY toggle state */
 } g_menu;
 
 static void
@@ -349,42 +362,85 @@ copy_truncated(char *dst, size_t dst_size, const char *src)
     dst[n] = '\0';
 }
 
-/* shim_start_menu(window, how) fmt "vii" */
+/* shim_start_menu(window, mbehavior) fmt "vii".  Note: the second arg is
+ * NOT the pick-mode (PICK_NONE/ONE/ANY) -- that's only passed to
+ * select_menu.  This is a behavior flag bitmask (MENU_BEHAVE_STANDARD,
+ * etc.) which we don't currently use. */
 static void
 handle_start_menu(va_list *ap_in)
 {
     va_list ap = *ap_in;
     (void) va_arg(ap, int);            /* window */
-    int how = va_arg(ap, int);
+    (void) va_arg(ap, int);            /* mbehavior -- ignored */
     g_menu.in_progress = true;
     g_menu.count = 0;
-    g_menu.how = how;
+    /* g_menu.how is set later in handle_select_menu, where the real
+     * pick-mode lives.  Default to PICK_NONE so accel auto-assign during
+     * add_menu doesn't burn letters on menus that won't use them. */
+    g_menu.how = PICK_NONE;
     g_menu.scroll_top = 0;
+    g_menu.next_auto_accel = 'a';
     g_menu.title[0] = '\0';
 }
 
 /* shim_add_menu(window, glyphinfo*, identifier, ch, gch, attr, clr, str,
- *               itemflags) fmt "vipi00iisi" */
+ *               itemflags)  fmt "vipi00iisi"
+ *
+ * NB: the fmt says 'i' for `identifier` but the C side actually passes
+ * the pointer (`P2V identifier`), which on Xtensa is the same 4-byte
+ * slot.  We read it as a void* and cache it for later use in
+ * nh_menu_set_item().  The two '0' slots are `char ch` and `char gch`;
+ * the C side passes them through varargs so they're promoted to int. */
 static void
 handle_add_menu(va_list *ap_in)
 {
     va_list ap = *ap_in;
-    (void) va_arg(ap, int);            /* window */
-    (void) va_arg(ap, void *);         /* glyphinfo */
-    (void) va_arg(ap, int);            /* identifier */
-    (void) va_arg(ap, void *);         /* ch (opaque) */
-    (void) va_arg(ap, void *);         /* gch (opaque) */
-    (void) va_arg(ap, int);            /* attr */
-    (void) va_arg(ap, int);            /* clr */
+    (void) va_arg(ap, int);             /* window */
+    (void) va_arg(ap, void *);          /* glyphinfo */
+    const void *ident = va_arg(ap, const void *);
+    int ch  = va_arg(ap, int);          /* per-item accelerator (0 = none) */
+    (void) va_arg(ap, int);             /* gch (group accelerator) */
+    (void) va_arg(ap, int);             /* attr */
+    (void) va_arg(ap, int);             /* clr */
     const char *str = va_arg(ap, const char *);
-    (void) va_arg(ap, int);            /* itemflags */
+    (void) va_arg(ap, int);             /* itemflags */
 
     if (!g_menu.in_progress) return;
     if (g_menu.count >= MENU_MAX_ITEMS) return;
-    copy_truncated(g_menu.items[g_menu.count],
-                   sizeof(g_menu.items[g_menu.count]),
-                   str);
-    g_menu.count++;
+
+    int i = g_menu.count++;
+    copy_truncated(g_menu.items[i], sizeof(g_menu.items[i]), str);
+    g_menu.selected[i] = false;
+
+    /* Copy the anything bytes -- the pointer NetHack handed us would
+     * be dangling by the time select_menu runs. */
+    int asz = nh_anything_size();
+    if (asz < 0 || asz > MENU_IDENT_MAX) asz = MENU_IDENT_MAX;
+    memset(g_menu.idents[i], 0, MENU_IDENT_MAX);
+    if (ident) memcpy(g_menu.idents[i], ident, asz);
+
+    /* Headers / separators are added with identifier = &zeroany.  Those
+     * items must NOT receive an accelerator. */
+    g_menu.selectable[i] = ident && !nh_anything_is_zero(g_menu.idents[i]);
+
+    /* If NetHack assigned an accelerator explicitly, use it; else
+     * auto-assign a/b/c... but only for selectable items.  We don't yet
+     * know the pick-mode (select_menu carries `how`, not start_menu), so
+     * we always auto-assign here -- select_menu will simply ignore the
+     * accel table when how == PICK_NONE. */
+    if (ch != 0) {
+        g_menu.accels[i] = (char) ch;
+    } else if (g_menu.selectable[i] && g_menu.next_auto_accel <= 'z') {
+        g_menu.accels[i] = (char) g_menu.next_auto_accel++;
+    } else {
+        g_menu.accels[i] = 0;
+    }
+
+    ESP_LOGI(TAG, "  menu[%d]: ch=%d ident=%p sel=%d accel='%c' (0x%02x) str=\"%.20s\"",
+             i, ch, ident, (int) g_menu.selectable[i],
+             g_menu.accels[i] ? g_menu.accels[i] : '.',
+             (unsigned char) g_menu.accels[i],
+             str ? str : "");
 }
 
 /* shim_end_menu(window, prompt) fmt "vis" */
@@ -416,20 +472,47 @@ render_menu(void)
     if (visible > MENU_VISIBLE_ROWS) visible = MENU_VISIBLE_ROWS;
 
     for (int i = 0; i < visible; i++) {
+        int idx = top + i;
         int y = 16 + i * 8;
-        tdeck_display_print(0, y, g_menu.items[top + i],
+
+        /* Build the rendered row.  Format depends on how:
+         *   PICK_NONE:               "<text>"
+         *   PICK_ONE  (selectable):  "<accel> - <text>"
+         *   PICK_ANY  (selectable):  "<accel> [*] <text>"   ('*' if picked)
+         *   PICK_ONE/ANY (header):   "<text>"
+         */
+        char row[MENU_MAX_TEXT + 8];
+        char accel = g_menu.accels[idx];
+        if (g_menu.how == PICK_NONE || accel == 0) {
+            snprintf(row, sizeof(row), "%s", g_menu.items[idx]);
+        } else if (g_menu.how == PICK_ANY) {
+            snprintf(row, sizeof(row), "%c [%c] %s",
+                     accel,
+                     g_menu.selected[idx] ? '*' : ' ',
+                     g_menu.items[idx]);
+        } else { /* PICK_ONE */
+            snprintf(row, sizeof(row), "%c - %s", accel, g_menu.items[idx]);
+        }
+        tdeck_display_print(0, y, row,
                             TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
     }
 
-    /* Footer hint: how to dismiss / scroll. */
-    char hint[64];
+    /* Footer hint: how to dismiss / scroll / confirm. */
+    char hint[128];
+    const char *action;
+    if (g_menu.how == PICK_ANY) {
+        action = "letter=toggle Enter=confirm ESC=cancel";
+    } else if (g_menu.how == PICK_ONE) {
+        action = "letter=pick ESC=cancel";
+    } else {
+        action = "any key to close";
+    }
     if (n > MENU_VISIBLE_ROWS) {
         int last = top + visible;
-        snprintf(hint, sizeof(hint),
-                 "[%d-%d/%d j/k=scroll any=close]",
-                 top + 1, last, n);
+        snprintf(hint, sizeof(hint), "[%d-%d/%d j/k=scroll %s]",
+                 top + 1, last, n, action);
     } else {
-        snprintf(hint, sizeof(hint), "[press any key]");
+        snprintf(hint, sizeof(hint), "[%s]", action);
     }
     tdeck_display_print(0, 240 - 8, hint,
                         TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
@@ -495,51 +578,141 @@ prompt_ext_cmd(void)
     return nh_lookup_ext_cmd(input);
 }
 
-/* shim_select_menu(window, how, menu_list**) fmt "iiip".
- * Returns count selected via ret_ptr.  Currently returns 0 (no selection)
- * after any keypress -- which closes display-only menus cleanly and
- * cancels PICK_ONE / PICK_ANY without picking anything. */
+/* Find a menu item by accelerator letter.  Returns the item index in
+ * g_menu, or -1 if no item has that accelerator. */
+static int
+menu_find_by_accel(int letter)
+{
+    for (int i = 0; i < g_menu.count; i++) {
+        if (g_menu.accels[i] == (char) letter) return i;
+    }
+    return -1;
+}
+
+/* Build the menu_list array NetHack expects back and write its address
+ * + length through the (MENU_ITEM_P **) arg.  Returns the count. */
+static int
+emit_menu_selection(void **menu_list_pp)
+{
+    int n = 0;
+    for (int i = 0; i < g_menu.count; i++) if (g_menu.selected[i]) n++;
+    if (n == 0 || !menu_list_pp) return 0;
+
+    void *list = nh_menu_alloc_list(n);
+    if (!list) return 0;
+
+    int j = 0;
+    for (int i = 0; i < g_menu.count; i++) {
+        if (!g_menu.selected[i]) continue;
+        /* count == -1 means "use the menu's default count" which for
+         * PICK_ANY usually means "all of this stack" in inventory ops. */
+        nh_menu_set_item(list, j++, g_menu.idents[i], -1);
+    }
+    *menu_list_pp = list;
+    return n;
+}
+
+/* shim_select_menu(window, how, MENU_ITEM_P **menu_list)  fmt "iiip".
+ * Renders the cached menu and walks the user through the selection mode
+ * NetHack asked for.  Returns the number of items selected via ret_ptr
+ * and writes the menu_list array NetHack will free. */
 static void
 handle_select_menu(va_list *ap_in, void *ret_ptr)
 {
-    /* args ignored -- we already cached everything in start/add/end */
-    (void) ap_in;
+    va_list ap = *ap_in;
+    (void) va_arg(ap, int);              /* window */
+    int how = va_arg(ap, int);
+    /* start_menu doesn't carry `how`; this is where it actually lives. */
+    g_menu.how = how;
+    void **menu_list_pp = va_arg(ap, void **);
+    if (menu_list_pp) *menu_list_pp = NULL;   /* default: nothing picked */
 
     if (g_menu.count == 0) {
-        /* No items -- nothing to render.  Close immediately. */
         if (ret_ptr) *(int *) ret_ptr = -1;
         return;
     }
 
     /* Drain any stale keypress so the menu doesn't auto-dismiss on the
-     * keystroke that triggered it. */
-    int dummy;
-    while (tdeck_keyboard_peek(&dummy)) { }
+     * key that triggered it. */
+    int drain;
+    while (tdeck_keyboard_peek(&drain)) { }
 
     render_menu();
 
-    /* Block for input; allow j/k to scroll if there's overflow. */
+    ESP_LOGI(TAG, "menu: how=%d count=%d", g_menu.how, g_menu.count);
+
+    int result = 0;            /* count of items selected; -1 for cancel */
     for (;;) {
         int key = tdeck_keyboard_getchar(portMAX_DELAY);
         if (key < 0) continue;
-        if (key == 'j' && g_menu.count > MENU_VISIBLE_ROWS) {
-            if (g_menu.scroll_top + MENU_VISIBLE_ROWS < g_menu.count) {
+        ESP_LOGI(TAG, "menu key=0x%02x ('%c')", key,
+                 (key >= 0x20 && key < 0x7f) ? key : '?');
+
+        /* Scroll j/k -- but for PICK_ONE/PICK_ANY these letters are also
+         * valid accelerators, so prefer accelerator lookup first. */
+        bool used_as_accel = false;
+        if (g_menu.how != PICK_NONE) {
+            int idx = menu_find_by_accel(key);
+            ESP_LOGI(TAG, "menu accel match: idx=%d", idx);
+            if (idx >= 0) {
+                used_as_accel = true;
+                if (g_menu.how == PICK_ONE) {
+                    /* Single pick: mark + finish. */
+                    g_menu.selected[idx] = true;
+                    result = emit_menu_selection(menu_list_pp);
+                    ESP_LOGI(TAG, "menu emit: result=%d list=%p",
+                             result, menu_list_pp ? *menu_list_pp : NULL);
+                    break;
+                } else {
+                    /* PICK_ANY: toggle and keep going. */
+                    g_menu.selected[idx] = !g_menu.selected[idx];
+                    render_menu();
+                    continue;
+                }
+            }
+        }
+
+        if (!used_as_accel) {
+            if (key == 0x1B) {           /* ESC -- cancel */
+                result = -1;
+                break;
+            }
+            if (key == '\r' || key == '\n' || key == ' ') {
+                /* Enter / Space:
+                 *   - PICK_NONE: dismiss.
+                 *   - PICK_ANY:  confirm with current selection. */
+                if (g_menu.how == PICK_ANY) {
+                    result = emit_menu_selection(menu_list_pp);
+                } else {
+                    result = 0;
+                }
+                break;
+            }
+            /* Scroll on j/k only if they aren't valid accelerators. */
+            if (key == 'j' && g_menu.count > MENU_VISIBLE_ROWS
+                && g_menu.scroll_top + MENU_VISIBLE_ROWS < g_menu.count) {
                 g_menu.scroll_top++;
                 render_menu();
                 continue;
             }
-        } else if (key == 'k' && g_menu.scroll_top > 0) {
-            g_menu.scroll_top--;
-            render_menu();
-            continue;
+            if (key == 'k' && g_menu.scroll_top > 0) {
+                g_menu.scroll_top--;
+                render_menu();
+                continue;
+            }
+            /* For PICK_NONE any other key dismisses. */
+            if (g_menu.how == PICK_NONE) {
+                result = 0;
+                break;
+            }
+            /* Otherwise quietly ignore */
         }
-        break;
     }
 
     /* Force the map to redraw on the next display_nhwindow. */
     map_dirty = true;
 
-    if (ret_ptr) *(int *) ret_ptr = -1;
+    if (ret_ptr) *(int *) ret_ptr = result;
 }
 
 /* --- main callback ----------------------------------------------- */

@@ -1389,6 +1389,50 @@ nh_lookup_ext_cmd(const char *name)
     }
     return -1;
 }
+
+/* Phase 3c menu-selection helpers.  shim_select_menu must hand NetHack
+ * a heap-allocated menu_item[] array via *menu_list and return its
+ * length.  The struct layout (anything + long) lives inside libnh, so
+ * the shim talks to it through these two functions.  NetHack will
+ * free() the array later when it processes the result. */
+void *
+nh_menu_alloc_list(int count)
+{
+    if (count <= 0) return NULL;
+    return (void *) alloc((unsigned) (count * (int) sizeof(menu_item)));
+}
+
+void
+nh_menu_set_item(void *list, int idx, const void *ident_ptr, long count)
+{
+    if (!list || idx < 0) return;
+    menu_item *items = (menu_item *) list;
+    if (ident_ptr) {
+        items[idx].item = *(const anything *) ident_ptr;
+    } else {
+        items[idx].item = cg.zeroany;
+    }
+    items[idx].count = count;
+}
+
+/* sizeof(anything) -- so the shim can allocate stable per-item copies of
+ * the identifier blob at add_menu time without knowing the struct
+ * layout.  The shim must hold at least this many bytes per item. */
+int
+nh_anything_size(void)
+{
+    return (int) sizeof(anything);
+}
+
+/* Returns true if the anything at `p` is bitwise equal to NetHack's
+ * `zeroany` -- i.e. the item was added with a NULL identifier and is
+ * therefore a header/separator, not a selectable choice. */
+int
+nh_anything_is_zero(const void *p)
+{
+    if (!p) return 1;
+    return memcmp(p, &cg.zeroany, sizeof(anything)) == 0 ? 1 : 0;
+}
 #endif /* CROSS_TO_ESP32S3 */
 
 /*libnhmain.c*/
