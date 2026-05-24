@@ -38,6 +38,11 @@ void shim_graphics_set_callback(shim_callback_t cb);
  * Returns ' ' if gi is NULL. */
 int nh_glyph_info_char(const void *glyphinfo);
 
+/* Look up an extended-command name (e.g. "pray", "chat") in NetHack's
+ * extcmdlist[].  Returns the command's index for shim_get_ext_cmd, or -1
+ * if not found.  Names are case-sensitive lower-case. */
+int nh_lookup_ext_cmd(const char *name);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1373,6 +1373,22 @@ nh_glyph_info_char(const void *gi)
      * by map_glyphinfo() in display.c. */
     return g->ttychar;
 }
+
+/* Phase 3c helper: look up an extended command by its textual name (e.g.
+ * "pray", "chat") and return its index in extcmdlist[], or -1 on miss. */
+int
+nh_lookup_ext_cmd(const char *name)
+{
+    extern struct ext_func_tab *extcmds_getentry(int);
+    if (!name || !*name) return -1;
+    for (int i = 0; ; i++) {
+        struct ext_func_tab *e = extcmds_getentry(i);
+        if (!e) break;
+        if (e->ef_txt && strcmp(e->ef_txt, name) == 0)
+            return i;
+    }
+    return -1;
+}
 #endif /* CROSS_TO_ESP32S3 */
 
 /*libnhmain.c*/

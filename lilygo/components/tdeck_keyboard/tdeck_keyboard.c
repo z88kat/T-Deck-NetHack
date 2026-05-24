@@ -19,9 +19,17 @@ static TaskHandle_t             s_task   = NULL;
  * fast enough for human typing without saturating I2C. */
 #define POLL_PERIOD_MS   20
 
-/* Remap raw ASCII from the keyboard IC into NetHack-friendly codes.
- *   `   -> ESC  (the T-Deck QWERTY has no dedicated ESC key)
- * Everything else passes through unchanged. */
+/* Remap raw bytes from the keyboard IC into NetHack-friendly codes.
+ * The LilyGo ATtiny firmware sends ASCII for letters/digits/punct,
+ * plus a handful of special codes for non-printable keys.  We patch a
+ * few that NetHack expects but the T-Deck doesn't have native keys for:
+ *
+ *   `   -> ESC  (no dedicated ESC key on the QWERTY)
+ *
+ * Sym-prefixed keys: depending on T-Deck firmware revision, the chip
+ * either returns the symbol byte directly (e.g. '#' for Sym+Q) or
+ * doesn't map the combo at all.  Watch the INFO log lines below to see
+ * what your unit sends, then extend the switch as needed. */
 static int
 remap_key(uint8_t raw)
 {
@@ -41,7 +49,9 @@ poll_task(void *arg)
                                            pdMS_TO_TICKS(20));
         if (err == ESP_OK && byte != 0x00) {
             int key = remap_key(byte);
-            ESP_LOGD(TAG, "key 0x%02x -> 0x%02x", byte, key);
+            ESP_LOGI(TAG, "key raw=0x%02x ('%c') -> 0x%02x ('%c')",
+                     byte, (byte >= 0x20 && byte < 0x7f) ? byte : '?',
+                     key,  (key  >= 0x20 && key  < 0x7f) ? key  : '?');
             xQueueSend(s_queue, &key, 0);  /* drop on full */
         }
         vTaskDelay(pdMS_TO_TICKS(POLL_PERIOD_MS));

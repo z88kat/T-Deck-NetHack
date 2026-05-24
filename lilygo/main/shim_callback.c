@@ -60,6 +60,25 @@ static int win_map    = -1;
 #define CELL_H       8
 #define MAP_PX_Y0    0
 
+/* --- Menu state -------------------------------------------------------
+ *
+ * NetHack opens menus through start_menu / add_menu* / end_menu /
+ * select_menu.  We accumulate the items here during add_menu and render
+ * the menu on the LCD when select_menu is called.  Any keypress closes
+ * the menu; nothing is selected (PICK_ONE/PICK_ANY appear as cancel).
+ * Letter-driven item selection is a follow-up. */
+#define MENU_MAX_ITEMS    80
+#define MENU_MAX_TEXT     52    /* 320/8 = 40 cols of text + a bit slack */
+#define MENU_VISIBLE_ROWS 27    /* 240/8 = 30 rows, minus title + spacer + hint */
+static struct {
+    bool    in_progress;        /* between start_menu and end_menu */
+    int     count;
+    int     how;                /* PICK_NONE=0, PICK_ONE=1, PICK_ANY=2 */
+    int     scroll_top;
+    char    title[MENU_MAX_TEXT];
+    char    items[MENU_MAX_ITEMS][MENU_MAX_TEXT];
+} g_menu;
+
 static void
 recenter_view_on_cursor(void)
 {
@@ -161,14 +180,18 @@ draw_status_message(int line_idx, const char *msg, int max_lines,
             n = STATUS_LINE_COLS;          /* one long word, chop */
         }
 
-        /* Render this slice. */
+        /* Render this slice via tdeck_display_print -- which is the
+         * exact code path the boot diagnostic used for "ABCDEF..." at
+         * x=0 (and showed the 'A' correctly).  Copy into a NUL-terminated
+         * buffer first since the source isn't terminated at `n`. */
         int y;
         status_pixel_y(line_idx + line, &y);
         if (y + CELL_H > 240) break;
-        int x = 0;
-        for (int i = 0; i < n && x + 8 <= 320; i++, x += 8) {
-            tdeck_display_putchar(x, y, line_start[i], fg, bg);
-        }
+        char line_buf[STATUS_LINE_COLS + 1];
+        int copy_n = (n <= STATUS_LINE_COLS) ? n : STATUS_LINE_COLS;
+        memcpy(line_buf, line_start, copy_n);
+        line_buf[copy_n] = '\0';
+        tdeck_display_print(0, y, line_buf, fg, bg);
         msg += n;
         line++;
     }
@@ -314,6 +337,211 @@ handle_display(va_list *ap_in)
     map_dirty = false;
 }
 
+/* --- menu rendering -------------------------------------------------- */
+
+static void
+copy_truncated(char *dst, size_t dst_size, const char *src)
+{
+    if (!src) { dst[0] = '\0'; return; }
+    size_t n = strlen(src);
+    if (n >= dst_size) n = dst_size - 1;
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
+/* shim_start_menu(window, how) fmt "vii" */
+static void
+handle_start_menu(va_list *ap_in)
+{
+    va_list ap = *ap_in;
+    (void) va_arg(ap, int);            /* window */
+    int how = va_arg(ap, int);
+    g_menu.in_progress = true;
+    g_menu.count = 0;
+    g_menu.how = how;
+    g_menu.scroll_top = 0;
+    g_menu.title[0] = '\0';
+}
+
+/* shim_add_menu(window, glyphinfo*, identifier, ch, gch, attr, clr, str,
+ *               itemflags) fmt "vipi00iisi" */
+static void
+handle_add_menu(va_list *ap_in)
+{
+    va_list ap = *ap_in;
+    (void) va_arg(ap, int);            /* window */
+    (void) va_arg(ap, void *);         /* glyphinfo */
+    (void) va_arg(ap, int);            /* identifier */
+    (void) va_arg(ap, void *);         /* ch (opaque) */
+    (void) va_arg(ap, void *);         /* gch (opaque) */
+    (void) va_arg(ap, int);            /* attr */
+    (void) va_arg(ap, int);            /* clr */
+    const char *str = va_arg(ap, const char *);
+    (void) va_arg(ap, int);            /* itemflags */
+
+    if (!g_menu.in_progress) return;
+    if (g_menu.count >= MENU_MAX_ITEMS) return;
+    copy_truncated(g_menu.items[g_menu.count],
+                   sizeof(g_menu.items[g_menu.count]),
+                   str);
+    g_menu.count++;
+}
+
+/* shim_end_menu(window, prompt) fmt "vis" */
+static void
+handle_end_menu(va_list *ap_in)
+{
+    va_list ap = *ap_in;
+    (void) va_arg(ap, int);            /* window */
+    const char *prompt = va_arg(ap, const char *);
+    copy_truncated(g_menu.title, sizeof(g_menu.title), prompt);
+    g_menu.in_progress = false;
+}
+
+static void
+render_menu(void)
+{
+    tdeck_display_fill(TDECK_COLOR_BLACK);
+
+    /* Title row in green. */
+    const char *title = g_menu.title[0] ? g_menu.title : "(menu)";
+    tdeck_display_print(0, 0, title, TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+
+    /* Visible items, starting at y=16 (title row + spacer). */
+    int n = g_menu.count;
+    int top = g_menu.scroll_top;
+    if (top < 0) top = 0;
+    if (top > n) top = n;
+    int visible = n - top;
+    if (visible > MENU_VISIBLE_ROWS) visible = MENU_VISIBLE_ROWS;
+
+    for (int i = 0; i < visible; i++) {
+        int y = 16 + i * 8;
+        tdeck_display_print(0, y, g_menu.items[top + i],
+                            TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
+    }
+
+    /* Footer hint: how to dismiss / scroll. */
+    char hint[64];
+    if (n > MENU_VISIBLE_ROWS) {
+        int last = top + visible;
+        snprintf(hint, sizeof(hint),
+                 "[%d-%d/%d j/k=scroll any=close]",
+                 top + 1, last, n);
+    } else {
+        snprintf(hint, sizeof(hint), "[press any key]");
+    }
+    tdeck_display_print(0, 240 - 8, hint,
+                        TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+}
+
+/* shim_get_ext_cmd() fmt "iv" -- NetHack invokes this when the user
+ * presses '#'.  We pop up a tiny "#: " input field at the bottom of the
+ * screen, accept a-z, and look up the typed name in extcmdlist[] via
+ * nh_lookup_ext_cmd.  Backspace edits, Enter submits, ESC cancels. */
+static int
+prompt_ext_cmd(void)
+{
+    char input[40];
+    int len = 0;
+    input[0] = '\0';
+
+    /* Drain any stale keystrokes (e.g. the '#' that opened this prompt). */
+    int dummy;
+    while (tdeck_keyboard_peek(&dummy)) { }
+
+    /* Render at the very bottom of the screen.  Use the last status line
+     * so we don't trample the map. */
+    int prompt_y = 240 - CELL_H;
+
+    for (;;) {
+        /* Clear the row and redraw "#: <input>_". */
+        static uint16_t blank[8 * 8];
+        for (int i = 0; i < 64; i++) blank[i] = TDECK_COLOR_BLACK;
+        for (int x = 0; x < 320; x += 8)
+            tdeck_display_blit(x, prompt_y, 8, 8, blank);
+
+        char render[64];
+        snprintf(render, sizeof(render), "#: %s_", input);
+        tdeck_display_print(0, prompt_y, render,
+                            TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+
+        int key = tdeck_keyboard_getchar(portMAX_DELAY);
+        if (key < 0) continue;
+
+        if (key == 0x1B) {            /* ESC -- cancel */
+            return -1;
+        } else if (key == '\r' || key == '\n') {
+            break;
+        } else if (key == 0x08 || key == 0x7F) {    /* backspace / DEL */
+            if (len > 0) input[--len] = '\0';
+        } else if (key >= 'a' && key <= 'z' && len < (int) sizeof(input) - 1) {
+            input[len++] = (char) key;
+            input[len] = '\0';
+        } else if (key >= 'A' && key <= 'Z' && len < (int) sizeof(input) - 1) {
+            input[len++] = (char) (key - 'A' + 'a');
+            input[len] = '\0';
+        }
+        /* ignore everything else */
+    }
+
+    /* Wipe the prompt row so it doesn't linger. */
+    static uint16_t blank2[8 * 8];
+    for (int i = 0; i < 64; i++) blank2[i] = TDECK_COLOR_BLACK;
+    for (int x = 0; x < 320; x += 8)
+        tdeck_display_blit(x, prompt_y, 8, 8, blank2);
+
+    if (len == 0) return -1;
+    return nh_lookup_ext_cmd(input);
+}
+
+/* shim_select_menu(window, how, menu_list**) fmt "iiip".
+ * Returns count selected via ret_ptr.  Currently returns 0 (no selection)
+ * after any keypress -- which closes display-only menus cleanly and
+ * cancels PICK_ONE / PICK_ANY without picking anything. */
+static void
+handle_select_menu(va_list *ap_in, void *ret_ptr)
+{
+    /* args ignored -- we already cached everything in start/add/end */
+    (void) ap_in;
+
+    if (g_menu.count == 0) {
+        /* No items -- nothing to render.  Close immediately. */
+        if (ret_ptr) *(int *) ret_ptr = -1;
+        return;
+    }
+
+    /* Drain any stale keypress so the menu doesn't auto-dismiss on the
+     * keystroke that triggered it. */
+    int dummy;
+    while (tdeck_keyboard_peek(&dummy)) { }
+
+    render_menu();
+
+    /* Block for input; allow j/k to scroll if there's overflow. */
+    for (;;) {
+        int key = tdeck_keyboard_getchar(portMAX_DELAY);
+        if (key < 0) continue;
+        if (key == 'j' && g_menu.count > MENU_VISIBLE_ROWS) {
+            if (g_menu.scroll_top + MENU_VISIBLE_ROWS < g_menu.count) {
+                g_menu.scroll_top++;
+                render_menu();
+                continue;
+            }
+        } else if (key == 'k' && g_menu.scroll_top > 0) {
+            g_menu.scroll_top--;
+            render_menu();
+            continue;
+        }
+        break;
+    }
+
+    /* Force the map to redraw on the next display_nhwindow. */
+    map_dirty = true;
+
+    if (ret_ptr) *(int *) ret_ptr = -1;
+}
+
 /* --- main callback ----------------------------------------------- */
 
 void
@@ -362,6 +590,27 @@ nh_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
         va_copy(ap2, ap);
         handle_display(&ap2);
         va_end(ap2);
+    } else if (strcmp(name, "shim_start_menu") == 0) {
+        va_list ap2;
+        va_copy(ap2, ap);
+        handle_start_menu(&ap2);
+        va_end(ap2);
+    } else if (strcmp(name, "shim_add_menu") == 0) {
+        va_list ap2;
+        va_copy(ap2, ap);
+        handle_add_menu(&ap2);
+        va_end(ap2);
+    } else if (strcmp(name, "shim_end_menu") == 0) {
+        va_list ap2;
+        va_copy(ap2, ap);
+        handle_end_menu(&ap2);
+        va_end(ap2);
+    } else if (strcmp(name, "shim_select_menu") == 0) {
+        va_list ap2;
+        va_copy(ap2, ap);
+        handle_select_menu(&ap2, ret_ptr);
+        va_end(ap2);
+        ret_handled = true;
     } else if (strcmp(name, "shim_raw_print") == 0
                && arg_codes[0] == 's') {
         /* Show the message on the bottom status line. */
@@ -458,23 +707,66 @@ nh_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
          * say they may be left untouched when a real key is returned
          * (NetHack ignores them in that case). */
     } else if (strcmp(name, "shim_yn_function") == 0) {
-        /* Loop until we get one of the allowed responses, or ESC.
-         * Args (per fmt "css0"): query, response-set, default char.
-         * For now we just return whatever the user types and let
-         * NetHack re-prompt if it doesn't like it. */
-        int key = tdeck_keyboard_getchar(portMAX_DELAY);
-        if (key < 0) key = '\033';
-        if (ret_ptr) *(char *) ret_ptr = (char) key;
+        /* fmt "css0": return char, query string, response-set string,
+         * default char (opaque).  Render the query on the LCD bottom
+         * row so the user can see what NetHack is asking, then loop
+         * until they give a key in the response set (or ESC). */
+        va_list ap_yn;
+        va_start(ap_yn, fmt);
+        const char *query = va_arg(ap_yn, const char *);
+        const char *resp  = va_arg(ap_yn, const char *);
+        va_end(ap_yn);
+
+        int prompt_y = 240 - CELL_H;
+        /* Clear the row and draw "<query> [resp]" */
+        static uint16_t yn_blank[8 * 8];
+        for (int i = 0; i < 64; i++) yn_blank[i] = TDECK_COLOR_BLACK;
+        for (int x = 0; x < 320; x += 8)
+            tdeck_display_blit(x, prompt_y, 8, 8, yn_blank);
+        char yn_prompt[64];
+        snprintf(yn_prompt, sizeof(yn_prompt), "%s [%s] ",
+                 query ? query : "?", resp ? resp : "");
+        tdeck_display_print(0, prompt_y, yn_prompt,
+                            TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+
+        /* Drain any stale keypress so the menu/prompt that opened this
+         * doesn't auto-dismiss. */
+        int dummy;
+        while (tdeck_keyboard_peek(&dummy)) { }
+
+        char picked = '\033';
+        for (;;) {
+            int key = tdeck_keyboard_getchar(portMAX_DELAY);
+            if (key < 0) continue;
+            if (key == 0x1B) { picked = '\033'; break; }       /* ESC */
+            if (key == '\r' || key == '\n') {
+                /* Treat Enter as accepting whatever the default is --
+                 * NetHack handles default-on-enter by interpreting '\r'
+                 * as the default response. */
+                picked = '\r';
+                break;
+            }
+            /* Accept the key if it's in the response set, or if the
+             * response set is empty/unspecified. */
+            if (!resp || !*resp || strchr(resp, key)) {
+                picked = (char) key;
+                break;
+            }
+            /* Otherwise quietly re-prompt: leave the query on screen
+             * and read another key. */
+        }
+        /* Wipe the prompt row when we're done so it doesn't linger. */
+        for (int x = 0; x < 320; x += 8)
+            tdeck_display_blit(x, prompt_y, 8, 8, yn_blank);
+        if (ret_ptr) *(char *) ret_ptr = picked;
     } else if (strcmp(name, "shim_message_menu") == 0) {
         /* Single-key menu: return whatever was typed. */
         int key = tdeck_keyboard_getchar(portMAX_DELAY);
         if (key < 0) key = '\033';
         if (ret_ptr) *(char *) ret_ptr = (char) key;
-    } else if (strcmp(name, "shim_select_menu") == 0) {
-        /* -1 still means "user cancelled" until we wire up menu nav. */
-        if (ret_ptr) *(int *) ret_ptr = -1;
     } else if (strcmp(name, "shim_get_ext_cmd") == 0) {
-        if (ret_ptr) *(int *) ret_ptr = -1;
+        if (ret_ptr) *(int *) ret_ptr = prompt_ext_cmd();
+        map_dirty = true;   /* prompt overwrote the bottom row */
     } else {
         default_return(ret_ptr, ret_code);
     }

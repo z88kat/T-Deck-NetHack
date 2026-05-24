@@ -79,6 +79,14 @@ tdeck_display_init(void)
     }
 
     /* esp_lcd panel-IO layer.  pclk_hz must be <= SPI host's max. */
+    /* trans_queue_depth = 1: we deliberately serialise draws so the
+     * per-call stack buffer in tdeck_display_putchar stays valid until
+     * the SPI transaction has actually consumed it.  With a deeper
+     * queue, up to N transactions point at the same stack offset and
+     * the last writer's data clobbers earlier ones in flight -- which
+     * manifests as the first character of each rendered line dropping
+     * off the screen and the next line's first character bleeding onto
+     * the previous line. */
     esp_lcd_panel_io_spi_config_t io_cfg = {
         .cs_gpio_num = TDECK_LCD_PIN_CS,
         .dc_gpio_num = TDECK_LCD_PIN_DC,
@@ -86,7 +94,7 @@ tdeck_display_init(void)
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .spi_mode = 0,
-        .trans_queue_depth = 4,
+        .trans_queue_depth = 1,
     };
     err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t) TDECK_LCD_HOST,
                                    &io_cfg, &s_io);

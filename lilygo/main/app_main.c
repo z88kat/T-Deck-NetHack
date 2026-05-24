@@ -121,6 +121,20 @@ app_main(void)
                             TDECK_COLOR_GREEN, TDECK_COLOR_BLUE);
         vTaskDelay(pdMS_TO_TICKS(1500));
         tdeck_display_fill(TDECK_COLOR_BLACK);
+
+        /* Phase 3c diagnostic for the "first column clipped" bug.
+         * If the leading 'A' below is missing, column 0 of the panel is
+         * being hidden -- bezel, off-screen, or a column-address-offset
+         * issue in the panel init.  If 'A' is visible, the wrap routine
+         * in shim_callback's draw_status_message is to blame. */
+        tdeck_display_print(0, 100,
+                            "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678901",
+                            TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
+        tdeck_display_print(0, 112,
+                            "if 'A' missing -> column 0 clipped",
+                            TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+        vTaskDelay(pdMS_TO_TICKS(2500));
+        tdeck_display_fill(TDECK_COLOR_BLACK);
     }
 
     /* Phase 4: bring the BlackBerry-style QWERTY up.  Polls I2C 0x55 in
