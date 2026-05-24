@@ -54,10 +54,13 @@ ifdef CROSS_TO_ESP32S3
 # Produces $(TARGETPFX)libnh.a + companion archives; the firmware itself is
 # linked by a sibling ESP-IDF project that consumes those .a files as
 # IMPORTED static libraries.  See sys/unix/hints/esp32s3.500.
+# `override` on HACKDIR is necessary because hints/macOS.500 (used for the
+# host-side stage that builds makedefs/dlb/uudecode) later assigns HACKDIR
+# without override and would otherwise win.
 CROSS=1
 BUILD_TARGET_LUA=1
-HACKDIR=/littlefs/nethack
-PREFIX=
+override HACKDIR=/littlefs/nethack
+override PREFIX=
 WANT_LIBNH=1
 override TARGET = esp32s3
 override TARGETDIR=../targets/$(TARGET)

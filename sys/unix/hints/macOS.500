@@ -574,6 +574,7 @@ $(TARGETPFX)macuuid.o: ../sys/unix/macuuid.m
 endif
 
 ifdef WANT_LIBNH
+ifndef CROSS_TO_ESP32S3
 # Build libnh.a by merging the engine objects, the shim windowport,
 # date.o (separate from $(HOBJ) per Makefile.src), hacklib.a, and Lua's
 # static archive.  Use libtool -static rather than ar so hacklib.a and
@@ -584,6 +585,9 @@ ifdef WANT_LIBNH
 # filter-out drops $(SYSOBJ) (which carries unixmain.o) and $(WINOBJ) (the
 # tty windowport) from $(HOBJ); $(LIBNHSYSOBJ) supplies libnhmain.o and
 # winshim.o in their place.
+# (When CROSS_TO_ESP32S3 is set, cross-post.500 supplies an Xtensa-friendly
+# `ar rcs` rule for the same target -- this libtool rule would just
+# generate a "overriding commands" warning.)
 $(TARGETPFX)libnh.a: $(LUALIB) $(HOBJ) $(LIBNHSYSOBJ) $(DATE_O) $(TARGET_HACKLIB)
 	libtool -static -o $@ \
 		$(filter-out $(SYSOBJ) $(WINOBJ),$(HOBJ)) \
@@ -594,6 +598,7 @@ $(TARGETPFX)libnhmain.o : ../sys/libnh/libnhmain.c $(HACK_H)
 # dependency tool added this to Makefile.src
 #$(TARGETPFX)winshim.o : ../win/shim/winshim.c $(HACK_H)
 #	$(CC) $(CFLAGS) -c -o$@ $<
+endif  # !CROSS_TO_ESP32S3
 endif  # WANT_LIBNH
 
 ifdef MAKEFILE_DOC
