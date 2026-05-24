@@ -443,12 +443,10 @@ override TARGET_CXXFLAGS = $(TARGET_CFLAGS)
 override TARGET_LFLAGS =
 #
 override SYSSRC = ../sys/libnh/libnhmain.c \
-		../sys/share/ioctl.c ../sys/share/unixtty.c \
 		../sys/unix/unixunix.c ../sys/unix/unixres.c \
 		../sys/esp32s3/esp32sys.c \
 		../win/shim/winshim.c
 override SYSOBJ = $(TARGETPFX)libnhmain.o \
-		$(TARGETPFX)ioctl.o $(TARGETPFX)unixtty.o \
 		$(TARGETPFX)unixunix.o $(TARGETPFX)unixres.o \
 		$(TARGETPFX)esp32sys.o \
 		$(TARGETPFX)winshim.o
