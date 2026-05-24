@@ -91,6 +91,11 @@ void tdeck_display_putchar(int x, int y, char c, uint16_t fg, uint16_t bg);
  * per character.  No wrapping. */
 void tdeck_display_print(int x, int y, const char *s, uint16_t fg, uint16_t bg);
 
+/* Set backlight brightness, 0 = off, 255 = full.  Implemented as PWM on
+ * an LEDC channel so dimming is smooth.  No-op if the panel hasn't been
+ * initialised. */
+void tdeck_display_set_backlight(uint8_t level);
+
 #ifdef __cplusplus
 }
 #endif

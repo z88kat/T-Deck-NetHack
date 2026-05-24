@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_common.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
@@ -87,14 +88,29 @@ tdeck_display_init(void)
         ESP_LOGI(TAG, "peripheral power enabled (GPIO %d)", TDECK_PIN_POWERON);
     }
 
-    /* Backlight off while we configure -- avoids a flash of garbage. */
+    /* Backlight via LEDC PWM so we can dim it on idle.  8-bit resolution,
+     * ~5 kHz; the panel doesn't shimmer at that rate.  Start at 0 (off)
+     * while we configure -- avoids a flash of garbage during init. */
     if (TDECK_LCD_PIN_BL >= 0) {
-        gpio_config_t bl_cfg = {
-            .pin_bit_mask = 1ULL << TDECK_LCD_PIN_BL,
-            .mode = GPIO_MODE_OUTPUT,
+        ledc_timer_config_t bl_timer = {
+            .speed_mode      = LEDC_LOW_SPEED_MODE,
+            .timer_num       = LEDC_TIMER_0,
+            .duty_resolution = LEDC_TIMER_8_BIT,
+            .freq_hz         = 5000,
+            .clk_cfg         = LEDC_AUTO_CLK,
         };
-        ESP_ERROR_CHECK(gpio_config(&bl_cfg));
-        gpio_set_level(TDECK_LCD_PIN_BL, 0);
+        ESP_ERROR_CHECK(ledc_timer_config(&bl_timer));
+
+        ledc_channel_config_t bl_chan = {
+            .gpio_num   = TDECK_LCD_PIN_BL,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel    = LEDC_CHANNEL_0,
+            .intr_type  = LEDC_INTR_DISABLE,
+            .timer_sel  = LEDC_TIMER_0,
+            .duty       = 0,
+            .hpoint     = 0,
+        };
+        ESP_ERROR_CHECK(ledc_channel_config(&bl_chan));
     }
 
     /* Init the SPI bus.  The panel doesn't use MISO, but the SD card on
@@ -186,13 +202,19 @@ tdeck_display_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
     tdeck_display_fill(TDECK_COLOR_BLACK);
 
-    if (TDECK_LCD_PIN_BL >= 0) {
-        gpio_set_level(TDECK_LCD_PIN_BL, 1);
-    }
+    tdeck_display_set_backlight(255);
 
     ESP_LOGI(TAG, "ST7789 init OK (%dx%d, SPI %d MHz)",
              TDECK_LCD_WIDTH, TDECK_LCD_HEIGHT, TDECK_LCD_SPI_HZ / 1000000);
     return ESP_OK;
+}
+
+void
+tdeck_display_set_backlight(uint8_t level)
+{
+    if (TDECK_LCD_PIN_BL < 0) return;
+    (void) ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, level);
+    (void) ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
 /* A reusable scratch buffer for tdeck_display_fill / putchar.  Allocated

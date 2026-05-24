@@ -58,6 +58,11 @@ int tdeck_keyboard_getchar(TickType_t timeout_ticks);
  * false if the queue is empty. */
 bool tdeck_keyboard_peek(int *out);
 
+/* Returns the FreeRTOS tick count of the most recent keypress, or 0 if
+ * the user has never pressed a key.  Used by the idle-backlight task to
+ * decide when to dim the screen. */
+TickType_t tdeck_keyboard_last_activity(void);
+
 #ifdef __cplusplus
 }
 #endif

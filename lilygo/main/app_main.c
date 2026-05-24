@@ -60,6 +60,40 @@ mount_nhdat(void)
 extern void nh_shim_callback(const char *name, void *ret_ptr,
                              const char *fmt, ...);
 
+/* Idle backlight management.  Three states:
+ *   bright (255)   : user touched a key in the last DIM_AFTER_MS
+ *   dim    (~32)   : DIM_AFTER_MS .. OFF_AFTER_MS since last key
+ *   off    (0)     : longer than OFF_AFTER_MS
+ * Any keypress restores bright on the next tick. */
+#define BL_BRIGHT      255
+#define BL_DIM          32
+#define DIM_AFTER_MS   30000   /* 30 s */
+#define OFF_AFTER_MS   90000   /* 1.5 min */
+
+static void
+idle_backlight_task(void *arg)
+{
+    (void) arg;
+    uint8_t last_set = 255;
+    for (;;) {
+        TickType_t now = xTaskGetTickCount();
+        TickType_t last = tdeck_keyboard_last_activity();
+        uint32_t idle_ms = (uint32_t) ((now - last) * portTICK_PERIOD_MS);
+        uint8_t target;
+        if (idle_ms >= OFF_AFTER_MS)
+            target = 0;
+        else if (idle_ms >= DIM_AFTER_MS)
+            target = BL_DIM;
+        else
+            target = BL_BRIGHT;
+        if (target != last_set) {
+            tdeck_display_set_backlight(target);
+            last_set = target;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
 static void
 nethack_task(void *arg)
 {
@@ -98,46 +132,16 @@ app_main(void)
     ESP_LOGI(TAG, "free internal heap: %u",
              (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
-    /* Phase 3a diagnostic: cycle through pure colours so we can tell
-     * exactly what's working.  Expected sequence: RED, GREEN, BLUE,
-     * WHITE, then the boot text on blue.  If a colour comes out wrong
-     * (e.g. red appears as blue), the rgb_endian or invert_color setting
-     * in tdeck_display.c needs flipping. */
+    /* Splash screen: centered "NetHack 5.0" on black, ~1.2 s, then clear
+     * before the rest of boot continues. */
     if (tdeck_display_init() == ESP_OK) {
-        ESP_LOGI(TAG, "lcd test: RED");
-        tdeck_display_fill(TDECK_COLOR_RED);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        ESP_LOGI(TAG, "lcd test: GREEN");
-        tdeck_display_fill(TDECK_COLOR_GREEN);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        ESP_LOGI(TAG, "lcd test: BLUE");
-        tdeck_display_fill(TDECK_COLOR_BLUE);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        ESP_LOGI(TAG, "lcd test: WHITE");
-        tdeck_display_fill(TDECK_COLOR_WHITE);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        tdeck_display_fill(TDECK_COLOR_BLUE);
-        tdeck_display_print(8, 8, "T-Deck NetHack 5.0",
-                            TDECK_COLOR_WHITE, TDECK_COLOR_BLUE);
-        tdeck_display_print(8, 24, "Phase 3a: display alive.",
-                            TDECK_COLOR_WHITE, TDECK_COLOR_BLUE);
-        tdeck_display_print(8, 40, "booting...",
-                            TDECK_COLOR_GREEN, TDECK_COLOR_BLUE);
-        vTaskDelay(pdMS_TO_TICKS(1500));
         tdeck_display_fill(TDECK_COLOR_BLACK);
-
-        /* Phase 3c diagnostic for the "first column clipped" bug.
-         * If the leading 'A' below is missing, column 0 of the panel is
-         * being hidden -- bezel, off-screen, or a column-address-offset
-         * issue in the panel init.  If 'A' is visible, the wrap routine
-         * in shim_callback's draw_status_message is to blame. */
-        tdeck_display_print(0, 100,
-                            "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678901",
-                            TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
-        tdeck_display_print(0, 112,
-                            "if 'A' missing -> column 0 clipped",
-                            TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
-        vTaskDelay(pdMS_TO_TICKS(2500));
+        const char *title = "NetHack 5.0";
+        int title_w = (int) strlen(title) * 8;
+        tdeck_display_print((TDECK_LCD_WIDTH - title_w) / 2,
+                            TDECK_LCD_HEIGHT / 2 - 4,
+                            title, TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
+        vTaskDelay(pdMS_TO_TICKS(1200));
         tdeck_display_fill(TDECK_COLOR_BLACK);
     }
 
@@ -146,6 +150,12 @@ app_main(void)
     if (tdeck_keyboard_init() != ESP_OK) {
         ESP_LOGE(TAG, "keyboard init failed; nethack input will not work");
     }
+
+    /* Phase 6a: idle-backlight watchdog.  Dims after 30 s without input,
+     * off after 90 s.  Any keypress wakes it on the next half-second
+     * tick. */
+    (void) xTaskCreate(idle_backlight_task, "idle_bl",
+                       2 * 1024, NULL, 2, NULL);
 
     mount_nhdat();
 

@@ -14,6 +14,7 @@ static i2c_master_bus_handle_t  s_bus    = NULL;
 static i2c_master_dev_handle_t  s_dev    = NULL;
 static QueueHandle_t            s_queue  = NULL;
 static TaskHandle_t             s_task   = NULL;
+static volatile TickType_t      s_last_key_tick = 0;
 
 /* Poll period.  ATtiny firmware buffers one key at a time; ~20 ms is
  * fast enough for human typing without saturating I2C. */
@@ -24,7 +25,10 @@ static TaskHandle_t             s_task   = NULL;
  * plus a handful of special codes for non-printable keys.  We patch a
  * few that NetHack expects but the T-Deck doesn't have native keys for:
  *
- *   `   -> ESC  (no dedicated ESC key on the QWERTY)
+ *   `      -> ESC      (backtick stands in for the missing ESC key)
+ *   0x08   -> ESC      (backspace doubles as ESC; the keyboard has no
+ *                       dedicated ESC and backspace is rarely used by
+ *                       NetHack outside text-entry prompts)
  *
  * Sym-prefixed keys: depending on T-Deck firmware revision, the chip
  * either returns the symbol byte directly (e.g. '#' for Sym+Q) or
@@ -34,8 +38,11 @@ static int
 remap_key(uint8_t raw)
 {
     switch (raw) {
-    case '`':  return 0x1B;    /* ESC */
-    default:   return raw;
+    case '`':       return 0x1B;    /* ESC */
+    case 0x08:      return 0x1B;    /* backspace -> ESC */
+    case '~':       return 0x10;    /* Ctrl+P (prevmsg / scrollback);
+                                       Shift+backtick on most layouts */
+    default:        return raw;
     }
 }
 
@@ -53,6 +60,7 @@ poll_task(void *arg)
                      byte, (byte >= 0x20 && byte < 0x7f) ? byte : '?',
                      key,  (key  >= 0x20 && key  < 0x7f) ? key  : '?');
             xQueueSend(s_queue, &key, 0);  /* drop on full */
+            s_last_key_tick = xTaskGetTickCount();
         }
         vTaskDelay(pdMS_TO_TICKS(POLL_PERIOD_MS));
     }
@@ -133,4 +141,10 @@ tdeck_keyboard_peek(int *out)
         return true;
     }
     return false;
+}
+
+TickType_t
+tdeck_keyboard_last_activity(void)
+{
+    return s_last_key_tick;
 }

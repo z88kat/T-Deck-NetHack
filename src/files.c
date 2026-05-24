@@ -41,6 +41,9 @@
 #if (!defined(MACOS9) && !defined(O_WRONLY) && !defined(AZTEC_C)) \
     || defined(USE_FCNTL)
 #include <fcntl.h>
+#ifdef CROSS_TO_ESP32S3
+#include <unistd.h>  /* fsync(), fileno() */
+#endif
 #endif
 
 #include <errno.h>
@@ -513,6 +516,22 @@ free_nhfile(NHFILE *nhfp)
 void
 close_nhfile(NHFILE *nhfp)
 {
+#ifdef CROSS_TO_ESP32S3
+    /* Force pending writes out to the SD card before the descriptor is
+     * closed.  ESP-IDF FATFS only commits on f_sync()/f_close(), and a
+     * power loss between close() returning and the card seeing the data
+     * leaves the save file truncated -- which makes the restore fail and
+     * forces the auto-wipe path.  fsync() routes through the VFS to
+     * f_sync() so save/level files reach the card before we move on. */
+    if (nhfp->mode != READING) {
+        if (nhfp->structlevel && nhfp->fd != -1) {
+            (void) fsync(nhfp->fd);
+        } else if (nhfp->fpdef) {
+            (void) fflush(nhfp->fpdef);
+            (void) fsync(fileno(nhfp->fpdef));
+        }
+    }
+#endif
     if (nhfp->structlevel && nhfp->fd != -1)
         (void) nhclose(nhfp->fd), nhfp->fd = -1;
     else if (nhfp->fpdef)

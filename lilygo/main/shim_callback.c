@@ -161,10 +161,20 @@ render_map(void)
 }
 
 /* Status / message area below the map: rows VIEW_ROWS..29 of 8-pixel
- * height (Y = 168..240).  9 lines × 40 chars max. */
+ * height (Y = 168..240).  9 lines × 40 chars max.  We split it:
+ *   rows 0..MSG_VISIBLE_LINES-1  -- scrolling message ring
+ *   bottom row (8)               -- yn / ext-cmd prompts (overlay) */
 #define STATUS_FIRST_LINE   VIEW_ROWS         /* row index of first line below map */
 #define STATUS_LINE_COUNT   ((240 - VIEW_ROWS * CELL_H) / CELL_H)
 #define STATUS_LINE_COLS    (320 / CELL_W)
+#define MSG_VISIBLE_LINES   8
+#define MSG_HISTORY_LINES   32
+
+/* Ring buffer of rendered (already word-wrapped) lines.  Newest line is
+ * stored at index (msg_head - 1) mod MSG_HISTORY_LINES. */
+static char msg_history[MSG_HISTORY_LINES][STATUS_LINE_COLS + 1];
+static int  msg_head   = 0;
+static int  msg_count  = 0;
 
 static void
 status_pixel_y(int line_idx, int *y_out)
@@ -185,66 +195,66 @@ clear_status_line(int line_idx, uint16_t bg)
     }
 }
 
-/* Word-wrap a message into the status area starting at line `line_idx`,
- * using up to `max_lines` of 8-pixel rows.  Wraps on the last whitespace
- * that fits within STATUS_LINE_COLS; if a single word is too long it is
- * chopped at the column boundary. */
+/* Push one already-sized line into the message-history ring buffer. */
 static void
-draw_status_message(int line_idx, const char *msg, int max_lines,
-                    uint16_t fg, uint16_t bg)
+push_message_line(const char *line)
 {
-    /* Clear the whole region first so leftovers from the previous
-     * message don't bleed through. */
-    for (int i = 0; i < max_lines; i++) clear_status_line(line_idx + i, bg);
+    int slot = msg_head;
+    strncpy(msg_history[slot], line ? line : "", STATUS_LINE_COLS);
+    msg_history[slot][STATUS_LINE_COLS] = '\0';
+    msg_head = (msg_head + 1) % MSG_HISTORY_LINES;
+    if (msg_count < MSG_HISTORY_LINES) msg_count++;
+}
 
-    if (!msg || !*msg) return;
+/* Render the latest MSG_VISIBLE_LINES of message history into the status
+ * area below the map.  Older lines at the top, newest at the bottom. */
+static void
+render_messages(void)
+{
+    int avail = (msg_count < MSG_VISIBLE_LINES) ? msg_count : MSG_VISIBLE_LINES;
+    int blank_rows = MSG_VISIBLE_LINES - avail;
+    /* Index in msg_history of the oldest visible line. */
+    int oldest = (msg_head + MSG_HISTORY_LINES - avail) % MSG_HISTORY_LINES;
 
-    int line = 0;
-    while (*msg && line < max_lines) {
-        /* Skip leading spaces (but preserve them at start of explicit
-         * empty lines like NetHack paragraph breaks). */
+    for (int i = 0; i < MSG_VISIBLE_LINES; i++) {
+        int y;
+        status_pixel_y(i, &y);
+        if (y + CELL_H > 240) break;
+        clear_status_line(i, TDECK_COLOR_BLACK);
+        if (i < blank_rows) continue;
+        int idx = (oldest + (i - blank_rows)) % MSG_HISTORY_LINES;
+        tdeck_display_print(0, y, msg_history[idx],
+                            TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
+    }
+}
+
+/* Word-wrap a message and push each line into the ring.  Repaint after. */
+static void
+push_message(const char *msg)
+{
+    if (!msg) return;
+    if (!*msg) { push_message_line(""); render_messages(); return; }
+    while (*msg) {
         while (*msg == ' ') msg++;
         if (!*msg) break;
-
-        /* How many chars fit on this line? */
-        const char *line_start = msg;
-        int run = 0;
-        int last_space = -1;
+        int run = 0, last_space = -1;
         while (msg[run] && run < STATUS_LINE_COLS) {
             if (msg[run] == ' ') last_space = run;
             run++;
         }
         int n;
-        if (!msg[run]) {
-            n = run;                       /* remaining fits */
-        } else if (last_space > 0) {
-            n = last_space;                /* wrap at last space */
-        } else {
-            n = STATUS_LINE_COLS;          /* one long word, chop */
-        }
+        if (!msg[run])           n = run;
+        else if (last_space > 0) n = last_space;
+        else                     n = STATUS_LINE_COLS;
 
-        /* Render this slice via tdeck_display_print -- which is the
-         * exact code path the boot diagnostic used for "ABCDEF..." at
-         * x=0 (and showed the 'A' correctly).  Copy into a NUL-terminated
-         * buffer first since the source isn't terminated at `n`. */
-        int y;
-        status_pixel_y(line_idx + line, &y);
-        if (y + CELL_H > 240) break;
         char line_buf[STATUS_LINE_COLS + 1];
         int copy_n = (n <= STATUS_LINE_COLS) ? n : STATUS_LINE_COLS;
-        memcpy(line_buf, line_start, copy_n);
+        memcpy(line_buf, msg, copy_n);
         line_buf[copy_n] = '\0';
-        tdeck_display_print(0, y, line_buf, fg, bg);
+        push_message_line(line_buf);
         msg += n;
-        line++;
     }
-}
-
-/* Legacy thin wrapper kept for one-shot lines that fit. */
-static void
-draw_status_line(int line_idx, const char *msg, uint16_t fg, uint16_t bg)
-{
-    draw_status_message(line_idx, msg, STATUS_LINE_COUNT - line_idx, fg, bg);
+    render_messages();
 }
 
 /* --- string-arg pretty printer (unchanged from Phase 2) ----------- */
@@ -374,12 +384,43 @@ static void
 handle_display(va_list *ap_in)
 {
     va_list ap = *ap_in;
-    int window = va_arg(ap, int);
-    (void) va_arg(ap, int); /* blocking */
-    if (window != win_map) return;
-    if (!map_dirty) return;
-    render_map();
-    map_dirty = false;
+    int window  = va_arg(ap, int);
+    int blocking = va_arg(ap, int);
+
+    /* Map window: refresh the dungeon view. */
+    if (window == win_map) {
+        if (map_dirty) {
+            render_map();
+            map_dirty = false;
+        }
+        return;
+    }
+
+    /* Message window with blocking=1 is NetHack's "--More--" mechanism --
+     * also how the intro/credits page asks the user to acknowledge.
+     * Display the message history we've accumulated, draw a prompt on
+     * the bottom row, wait for any key, then clear the prompt. */
+    if (window == NHW_MESSAGE && blocking) {
+        render_messages();
+
+        int prompt_y = 240 - CELL_H;
+        static uint16_t blank[8 * 8];
+        for (int i = 0; i < 64; i++) blank[i] = TDECK_COLOR_BLACK;
+        for (int x = 0; x < 320; x += 8)
+            tdeck_display_blit(x, prompt_y, 8, 8, blank);
+        tdeck_display_print(0, prompt_y, "--More--",
+                            TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+
+        /* Drain stale keys so the press that opened the prompt doesn't
+         * immediately dismiss it. */
+        int drain;
+        while (tdeck_keyboard_peek(&drain)) { }
+        (void) tdeck_keyboard_getchar(portMAX_DELAY);
+
+        for (int x = 0; x < 320; x += 8)
+            tdeck_display_blit(x, prompt_y, 8, 8, blank);
+        map_dirty = true;
+    }
 }
 
 /* --- menu rendering -------------------------------------------------- */
@@ -542,6 +583,73 @@ render_menu(void)
     }
     tdeck_display_print(0, 240 - 8, hint,
                         TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+}
+
+/* Full-screen scrollback view of the message history.  Triggered by
+ * NetHack's prevmsg command (Ctrl+P).  Scroll with j/k, dismiss with
+ * ESC, Enter, or Space.  Doesn't return anything to NetHack -- callers
+ * just need to repaint the map afterwards. */
+static void
+show_message_history(void)
+{
+    if (msg_count == 0) {
+        return;
+    }
+
+    /* Page geometry: title row at y=0, visible message lines below it,
+     * hint row at the bottom. */
+    const int title_y = 0;
+    const int hint_y  = 240 - CELL_H;
+    const int first_msg_y = CELL_H * 2;   /* title + 1-row spacer */
+    const int visible_rows = (hint_y - first_msg_y) / CELL_H;
+
+    /* Start scrolled to the bottom (newest visible). */
+    int top;
+    if (msg_count <= visible_rows) top = 0;
+    else                           top = msg_count - visible_rows;
+
+    int oldest = (msg_head + MSG_HISTORY_LINES - msg_count) % MSG_HISTORY_LINES;
+
+    /* Drain stale keys so the trigger key doesn't immediately dismiss. */
+    int drain;
+    while (tdeck_keyboard_peek(&drain)) { }
+
+    for (;;) {
+        tdeck_display_fill(TDECK_COLOR_BLACK);
+
+        char title[STATUS_LINE_COLS + 1];
+        int last = top + visible_rows;
+        if (last > msg_count) last = msg_count;
+        snprintf(title, sizeof(title), "Messages [%d-%d of %d]",
+                 top + 1, last, msg_count);
+        tdeck_display_print(0, title_y, title,
+                            TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+
+        for (int i = 0; i < visible_rows; i++) {
+            if (top + i >= msg_count) break;
+            int idx = (oldest + top + i) % MSG_HISTORY_LINES;
+            tdeck_display_print(0, first_msg_y + i * CELL_H,
+                                msg_history[idx],
+                                TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
+        }
+
+        tdeck_display_print(0, hint_y, "[j/k=scroll  Enter/ESC=close]",
+                            TDECK_COLOR_GREEN, TDECK_COLOR_BLACK);
+
+        int key = tdeck_keyboard_getchar(portMAX_DELAY);
+        if (key < 0) continue;
+        if (key == 0x1B || key == '\r' || key == '\n' || key == ' ')
+            break;
+        if ((key == 'j' || key == 'J')
+            && top + visible_rows < msg_count) {
+            top++;
+        } else if ((key == 'k' || key == 'K') && top > 0) {
+            top--;
+        }
+    }
+
+    /* Force a full repaint on the next display_nhwindow. */
+    map_dirty = true;
 }
 
 /* shim_get_ext_cmd() fmt "iv" -- NetHack invokes this when the user
@@ -823,11 +931,11 @@ nh_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
         esp_restart();
     } else if (strcmp(name, "shim_raw_print") == 0
                && arg_codes[0] == 's') {
-        /* Show the message on the bottom status line. */
+        /* Append the message to the scrolling history below the map. */
         va_list ap2;
         va_copy(ap2, ap);
         const char *s = va_arg(ap2, const char *);
-        draw_status_line(0, s ? s : "", TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
+        push_message(s ? s : "");
         va_end(ap2);
 
         /* Safety net: if NetHack is panicking because the save it just
@@ -865,7 +973,7 @@ nh_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
         (void) va_arg(ap2, int);                /* window */
         (void) va_arg(ap2, int);                /* attr */
         const char *s = va_arg(ap2, const char *);
-        draw_status_line(0, s ? s : "", TDECK_COLOR_WHITE, TDECK_COLOR_BLACK);
+        push_message(s ? s : "");
         va_end(ap2);
     }
 
@@ -926,11 +1034,23 @@ nh_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
     /* Input callbacks: block on the keyboard queue for real keypresses. */
     if (ret_handled) {
         /* handler already wrote ret_ptr; leave it alone */
-    } else if (strcmp(name, "shim_nhgetch") == 0
-               || strcmp(name, "shim_doprev_message") == 0) {
-        /* Block forever for a key; NetHack expects an int back. */
+    } else if (strcmp(name, "shim_doprev_message") == 0) {
+        /* NetHack's prevmsg command (default binding Ctrl+P) lands here.
+         * Show our full-screen scrollback overlay; the return value is
+         * unused by NetHack's caller. */
+        show_message_history();
+        if (ret_ptr) *(int *) ret_ptr = 0;
+    } else if (strcmp(name, "shim_nhgetch") == 0) {
+        /* Block for a key; intercept the prevmsg trigger so the user
+         * can pop the scrollback without NetHack's keybinding being in
+         * the way. */
         int key = tdeck_keyboard_getchar(portMAX_DELAY);
         if (key < 0) key = '\033';
+        while (key == 0x10 /* Ctrl+P */) {
+            show_message_history();
+            key = tdeck_keyboard_getchar(portMAX_DELAY);
+            if (key < 0) key = '\033';
+        }
         if (ret_ptr) *(int *) ret_ptr = key;
     } else if (strcmp(name, "shim_nh_poskey") == 0) {
         /* nh_poskey expects an int char OR a mouse event.  We only
@@ -939,6 +1059,11 @@ nh_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
          * Set *mod=0 too (the three p args are coordxy*, coordxy*, int*). */
         int key = tdeck_keyboard_getchar(portMAX_DELAY);
         if (key < 0) key = '\033';
+        while (key == 0x10 /* Ctrl+P */) {
+            show_message_history();
+            key = tdeck_keyboard_getchar(portMAX_DELAY);
+            if (key < 0) key = '\033';
+        }
         if (ret_ptr) *(int *) ret_ptr = key;
         /* The x/y/mod outputs were passed as pointers in args; we
          * don't have easy access to them here, but the windowport docs
