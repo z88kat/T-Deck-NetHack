@@ -1,0 +1,8 @@
+idf_component_register(
+    SRCS
+        "tdeck_keyboard.c"
+    INCLUDE_DIRS "include"
+    REQUIRES
+        driver
+        esp_driver_i2c
+)

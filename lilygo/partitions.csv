@@ -1,0 +1,16 @@
+# tdeck-nethack partition table for a 16 MB T-Deck flash.
+#
+# Reserves:
+#   - 3 MB for nhdat (LittleFS, read-only after install)
+#   - 64 KB for nvs (general key/value)
+#   - 1.5 MB single-OTA app slot (no OTA in v0; switch to factory+ota_0+ota_1 later)
+#
+# Save files / bones live on the SD card (FATFS at /sdcard), not in flash --
+# wear on the internal NOR is the main reason.
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x6000
+phy_init, data, phy,     0xf000,  0x1000
+factory,  app,  factory, 0x10000, 4M
+nhdat,    data, spiffs,  ,        3M
+storage,  data, spiffs,  ,        1M

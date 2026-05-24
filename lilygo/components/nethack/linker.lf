@@ -1,0 +1,49 @@
+# components/nethack/linker.lf -- placement directives for libnh.a / hacklib.a
+# / lua548.a.
+#
+# Pushes the large NetHack engine .bss arrays (glyphmap [moved to .bss by
+# the ESP32 source guard], mons, objects, svl, gg, ...) into PSRAM so the
+# firmware fits in the 320 KB DRAM the ESP32-S3 actually has.
+#
+# Requires CONFIG_SPIRAM=y and CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+# in sdkconfig so the `extern_ram` segment is mapped.
+#
+# Note: .data placement at the linker level is NOT possible on ESP32-S3
+# because the bootloader copies .data from flash to internal DRAM before
+# PSRAM is mapped.  Source-level fixes (see display.c CROSS_TO_ESP32S3
+# guard around glyphmap) move the offenders to .bss instead.
+
+[scheme:nethack_extram]
+entries:
+    text -> flash_text
+    rodata -> flash_rodata
+    data -> dram0_data
+    bss -> extern_ram
+    common -> extern_ram
+    extram_bss -> extern_ram
+    iram -> iram0_text
+    iram_data -> iram0_data
+    iram_bss -> iram0_bss
+    dram -> dram0_data
+    rtc_text -> rtc_text
+    rtc_data -> rtc_data
+    rtc_rodata -> rtc_data
+    rtc_bss -> rtc_bss
+    tcm_text -> tcm_text
+    tcm_data -> tcm_data
+    legacy_bss -> dram0_bss
+
+[mapping:nethack]
+archive: libnh.a
+entries:
+    * (nethack_extram)
+
+[mapping:hacklib]
+archive: hacklib.a
+entries:
+    * (nethack_extram)
+
+[mapping:lua548]
+archive: lua548.a
+entries:
+    * (nethack_extram)

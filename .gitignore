@@ -98,3 +98,12 @@ util/*.lib
 util/*.exp
 submodules/CHKSUMS.tmp
 sys/amiga/regex/
+
+# ESP-IDF firmware project (lilygo/).  Generated outputs and the staged
+# nhdat copy that gets rebuilt from dat/nhdat on every cmake configure.
+lilygo/build/
+lilygo/sdkconfig
+lilygo/sdkconfig.old
+lilygo/dependencies.lock
+lilygo/managed_components/
+lilygo/data/nhdat
