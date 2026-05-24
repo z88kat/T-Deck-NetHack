@@ -1358,4 +1358,21 @@ EM_JS(void, create_global, (char *name_str, void *ptr, char *type_str), {
 
 #endif
 
+#ifdef CROSS_TO_ESP32S3
+/* Phase 3b helper for the ESP-IDF shim layer (which can't include
+ * NetHack headers).  Returns the printable ASCII character NetHack would
+ * draw on a tty for the given glyph_info -- '.', '#', '@', monsters,
+ * objects, etc.  Returns ' ' if gi is null. */
+int
+nh_glyph_info_char(const void *gi)
+{
+    const glyph_info *g = (const glyph_info *) gi;
+    if (!g)
+        return ' ';
+    /* glyph_info.ttychar is the canonical tty representation, populated
+     * by map_glyphinfo() in display.c. */
+    return g->ttychar;
+}
+#endif /* CROSS_TO_ESP32S3 */
+
 /*libnhmain.c*/
