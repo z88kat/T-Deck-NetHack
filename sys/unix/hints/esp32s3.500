@@ -1,0 +1,66 @@
+#
+# NetHack 5.0  esp32s3 $NHDT-Date: 2026-05-24 00:00:00 $  $NHDT-Branch: NetHack-5.0 $
+# NetHack may be freely redistributed.  See license for details.
+#
+#-PRE
+# Hints file for cross-compiling NetHack 5.0 to the Espressif ESP32-S3
+# (Xtensa LX7).  Targets the LilyGo T-Deck (16 MB flash, 8 MB PSRAM,
+# 320x240 ST7789, BlackBerry-style QWERTY keyboard, microSD).
+#
+# This hints file is consumed by `sys/unix/setup.sh hints/esp32s3.500` to
+# bootstrap a build directory.  The actual cross-compile is driven from the
+# top-level Makefile via `make CROSS_TO_ESP32S3=1 WANT_LIBNH=1 all`, which
+# mirrors the existing `CROSS_TO_WASM` recipe.
+#
+# Prerequisites:
+#   1. ESP-IDF v5.x installed and `. $IDF_PATH/export.sh` sourced so that
+#      `xtensa-esp32s3-elf-gcc` and `xtensa-esp32s3-elf-ar` are on PATH.
+#   2. Host build tools (makedefs, dlb, uudecode) must be available; the
+#      Stage-1 host build is configured separately via hints/macOS.500 or
+#      hints/linux-minimal.
+#
+# Output:
+#   targets/esp32s3/libnh.a   - NetHack engine + shim windowport, Xtensa ELF
+#   targets/esp32s3/liblua-5.4.8.a (built from lib/lua-5.4.8)
+#   targets/esp32s3/hacklib.a (engine helpers)
+#
+# Drop these three archives into your ESP-IDF component CMakeLists.txt as
+# IMPORTED static libraries and link them into your application.
+
+PREFIX=$(wildcard ~)/nethack-esp32s3
+HACKDIR=/littlefs/nethack
+SHELLDIR=
+INSTDIR=$(HACKDIR)
+VARDIR=/sdcard/nethack
+
+# Cross-compiler.  Override on the make command line if your toolchain is
+# in a non-default location:
+#   make CROSS_TO_ESP32S3=1 ESP32S3_CC=/opt/esp/.../xtensa-esp32s3-elf-gcc ...
+ESP32S3_CC ?= xtensa-esp32s3-elf-gcc
+ESP32S3_AR ?= xtensa-esp32s3-elf-ar
+ESP32S3_RANLIB ?= xtensa-esp32s3-elf-ranlib
+
+# Xtensa-specific flags.  -mlongcalls is required for code that lives in
+# flash and may make calls that exceed the 1 MB short-jump window.
+ESP32S3_CFLAGS = -mlongcalls -ffunction-sections -fdata-sections -Os
+ESP32S3_CFLAGS += -DESP_PLATFORM -DCONFIG_IDF_TARGET_ESP32S3
+
+CFLAGS = -I../include $(ESP32S3_CFLAGS)
+
+# Quiet a Lua warning that doesn't apply on bare-metal targets but is
+# triggered by lib/lua-5.4.8/src/loslib.c's tmpnam() usage.
+SYSCFLAGS = -DLUA_USE_POSIX -DLUA_USE_C99
+
+LINK = $(CC)
+
+# We use the shim windowport (see win/shim/winshim.c) -- no tty, no curses.
+WINSRC =
+WINOBJ =
+WINLIB =
+
+# No install permissions on an embedded target; these keep the rules happy.
+CHOWN = true
+CHGRP = true
+VARDIRPERM = 0755
+VARFILEPERM = 0644
+GAMEPERM = 0755
