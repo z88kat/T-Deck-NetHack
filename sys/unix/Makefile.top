@@ -282,6 +282,9 @@ dlb:
 wasm:
 	( cd src ; $(MAKE) CROSS_TO_WASM=1 ../targets/wasm/nethack.js )
 
+esp32s3:
+	( cd src ; $(MAKE) CROSS_TO_ESP32S3=1 WANT_LIBNH=1 ../targets/esp32s3/libnh.a )
+
 package: $(GAME) recover $(VARDAT) spec_levs
 	( cd src ;  $(MAKE) $(PACKAGE) )
 

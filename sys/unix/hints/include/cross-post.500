@@ -185,6 +185,35 @@ $(TARGETPFX)libnhmain.o : ../sys/libnh/libnhmain.c $(HACK_H)
 endif  # CROSS_TO_WASM
 
 #
+ifdef CROSS_TO_ESP32S3
+# Archive rule.  Unlike the host build (Makefile.src ~libnh.a) we cannot
+# use macOS `libtool -static` here, so we ship the three archives separately
+# and let the ESP-IDF CMake link step pull them in as IMPORTED libraries.
+$(ESP32S3_TARGET): pregame $(TARGET_HACKLIB) $(TARGETPFX)date.o $(HOSTOBJ) \
+		$(HOBJ) $(LUACROSSLIB) $(SYSOBJ)
+	-rm -f $@
+	$(TARGET_AR) rcs $@ \
+		$(filter-out $(SYSOBJ) $(WINOBJ),$(HOBJ)) \
+		$(SYSOBJ) $(TARGETPFX)date.o
+	$(RANLIB) $@
+	@echo "$@ built (Xtensa static archive)."
+	@echo "Companion archives:"
+	@echo "  $(TARGET_HACKLIB)"
+	@echo "  $(LUACROSSLIB)"
+	@echo "Link all three from your ESP-IDF component CMakeLists.txt."
+
+#
+$(TARGETPFX)unixmain.o : ../sys/unix/unixmain.c $(HACK_H)
+$(TARGETPFX)unixres.o : ../sys/unix/unixres.c $(HACK_H)
+$(TARGETPFX)unixunix.o : ../sys/unix/unixunix.c $(HACK_H)
+$(TARGETPFX)ioctl.o : ../sys/share/ioctl.c $(HACK_H)
+$(TARGETPFX)unixtty.o : ../sys/share/unixtty.c $(HACK_H)
+$(TARGETPFX)winshim.o : ../win/shim/winshim.c $(HACK_H)
+$(TARGETPFX)libnhmain.o : ../sys/libnh/libnhmain.c $(HACK_H)
+$(TARGETPFX)esp32sys.o : ../sys/esp32s3/esp32sys.c
+endif  # CROSS_TO_ESP32S3
+
+#
 ifdef CROSS_TO_MIPS
 $(MIPS_TARGET): pregame $(TARGETPFX)date.o $(HOSTOBJ) $(HOBJ) $(LUACROSSLIB) \
 			$(TARGETPFX)ncurses/lib/libncurses.a \

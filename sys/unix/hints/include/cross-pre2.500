@@ -397,6 +397,93 @@ $(TARGETPFX)%.o : ../win/shim/%.c
 endif  # CROSS_TO_WASM
 
 
+ifdef CROSS_TO_ESP32S3
+#===============-=================================================
+# ESP32-S3 (Xtensa LX7) cross-compile.  Mirrors the CROSS_TO_WASM block
+# above; the only fundamental difference is that we stop at a static
+# archive (libnh.a) rather than producing a linked executable, because
+# the ESP-IDF application that hosts NetHack does the final link.
+#===============-=================================================
+CROSSCOMPILE=1
+ESP32S3_CC ?= xtensa-esp32s3-elf-gcc
+ESP32S3_AR ?= xtensa-esp32s3-elf-ar
+ESP32S3_RANLIB ?= xtensa-esp32s3-elf-ranlib
+ESP32S3_TARGET = $(TARGETPFX)libnh.a
+#
+override TARGET_CC = $(ESP32S3_CC)
+override TARGET_CXX = $(ESP32S3_CC)
+override TARGET_AR = $(ESP32S3_AR)
+override TARGET_LINK = $(ESP32S3_CC)
+#
+ESP32S3_CFLAGS = -Wall -Wextra -Wno-missing-field-initializers
+ESP32S3_CFLAGS += -Wno-unused-parameter -Wno-format -Wno-implicit-fallthrough
+ESP32S3_CFLAGS += -mlongcalls -ffunction-sections -fdata-sections
+ESP32S3_CFLAGS += -Os
+ESP32S3_CFLAGS += -DESP_PLATFORM -DCONFIG_IDF_TARGET_ESP32S3
+ESP32S3_CFLAGS += $(WINCFLAGS)
+ESP32S3_CFLAGS += -I../include -DNOTPARMDECL
+ESP32S3_CFLAGS += -DSYSCF -DSYSCF_FILE=\"/littlefs/nethack/sysconf\" -DSECURE
+ESP32S3_CFLAGS += -DNHUUID
+ESP32S3_CFLAGS += -DDLB
+ESP32S3_CFLAGS += -DHACKDIR=\"$(HACKDIR)\"
+ESP32S3_CFLAGS += -DDEFAULT_WINDOW_SYS=\"shim\"
+ESP32S3_CFLAGS += -DNOMAIL -DNO_SIGNAL -DNOSHELL
+ESP32S3_CFLAGS += -DNOCRASHREPORT -DNOPANICTRACE
+ESP32S3_CFLAGS += -DNOCWD_ASSUMPTIONS
+ESP32S3_CFLAGS += $(LUAINCL)
+ESP32S3_CFLAGS += -DNOTTYGRAPHICS -DSHIM_GRAPHICS -DLIBNH
+ESP32S3_CFLAGS += -DCROSSCOMPILE
+ESP32S3_TARGET_CFLAGS = -DCROSSCOMPILE_TARGET -DCROSS_TO_ESP32S3
+#
+# For the src/ sub-make
+override CFLAGS = $(ESP32S3_CFLAGS)
+override TARGET_CFLAGS = $(ESP32S3_CFLAGS) $(ESP32S3_TARGET_CFLAGS)
+LUA_TARGET_CFLAGS = $(TARGET_CFLAGS)
+override TARGET_CXXFLAGS = $(TARGET_CFLAGS)
+override TARGET_LFLAGS =
+#
+override SYSSRC = ../sys/libnh/libnhmain.c \
+		../sys/share/ioctl.c ../sys/share/unixtty.c \
+		../sys/unix/unixunix.c ../sys/unix/unixres.c \
+		../sys/esp32s3/esp32sys.c \
+		../win/shim/winshim.c
+override SYSOBJ = $(TARGETPFX)libnhmain.o \
+		$(TARGETPFX)ioctl.o $(TARGETPFX)unixtty.o \
+		$(TARGETPFX)unixunix.o $(TARGETPFX)unixres.o \
+		$(TARGETPFX)esp32sys.o \
+		$(TARGETPFX)winshim.o
+override WINLIB =
+override LUALIB =
+override LUATOPLIB =
+override REGEXOBJ = $(TARGETPFX)posixregex.o
+override WINOBJ =
+override UUIDOBJ =
+# don't bother making the regular NetHack executable
+override GAME =
+ESP32S3_DAT = bogusmon data engrave epitaph oracles quest.lua rumors
+ESP32S3_DEP = include/nhlua.h $(ESP32S3_DAT) spec_levs check-dlb
+override ALLDEP = $(ESP32S3_DEP) esp32s3
+override PREGAME += mkdir -p $(TARGETDIR)/esp32s3-data ;
+override CLEANMORE += rm -rf $(TARGETDIR) ;
+RANLIB = $(ESP32S3_RANLIB)
+# Rule for file in sys/unix
+$(TARGETPFX)%.o : ../sys/unix/%.c
+	$(TARGET_CC) $(TARGET_CFLAGS) -c -o $@ $<
+# Rule for file in sys/share
+$(TARGETPFX)%.o : ../sys/share/%.c
+	$(TARGET_CC) $(TARGET_CFLAGS) -c -o $@ $<
+# Rule for file in sys/libnh
+$(TARGETPFX)%.o : ../sys/libnh/%.c
+	$(TARGET_CC) $(TARGET_CFLAGS) -c -o $@ $<
+# Rule for file in sys/esp32s3
+$(TARGETPFX)%.o : ../sys/esp32s3/%.c
+	$(TARGET_CC) $(TARGET_CFLAGS) -c -o $@ $<
+# Rule for files in win/shim
+$(TARGETPFX)%.o : ../win/shim/%.c
+	$(TARGET_CC) $(TARGET_CFLAGS) -c -o $@ $<
+endif  # CROSS_TO_ESP32S3
+
+
 ifdef CROSS_TO_MIPS
 #================================================================
 # MIPS cross-compile recipe

@@ -49,6 +49,22 @@ override TARGETPFX = $(TARGETDIR)/
 override TARGET_LIBS=
 endif
 
+ifdef CROSS_TO_ESP32S3
+# Cross-compile to Espressif ESP32-S3 (Xtensa LX7), targeting LilyGo T-Deck.
+# Produces $(TARGETPFX)libnh.a + companion archives; the firmware itself is
+# linked by a sibling ESP-IDF project that consumes those .a files as
+# IMPORTED static libraries.  See sys/unix/hints/esp32s3.500.
+CROSS=1
+BUILD_TARGET_LUA=1
+HACKDIR=/littlefs/nethack
+PREFIX=
+WANT_LIBNH=1
+override TARGET = esp32s3
+override TARGETDIR=../targets/$(TARGET)
+override TARGETPFX = $(TARGETDIR)/
+override TARGET_LIBS=
+endif
+
 ifdef CROSS
 override PREGAME=
 override BUILDMORE=
