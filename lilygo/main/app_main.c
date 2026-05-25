@@ -19,6 +19,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_pm.h"
 #include "esp_psram.h"
 #include "esp_spiffs.h"
 #include "freertos/FreeRTOS.h"
@@ -117,6 +118,24 @@ void
 app_main(void)
 {
     ESP_LOGI(TAG, "tdeck-nethack boot");
+
+    /* Dynamic frequency scaling + light sleep.  Max stays at 240 MHz so
+     * the SPI panel + ESP-IDF heavy lifters aren't throttled; min drops
+     * to 40 MHz when every task is blocked.  light_sleep_enable=true
+     * actually halts the CPU during idle, waking on the next FreeRTOS
+     * tick or peripheral interrupt -- gives meaningful battery savings
+     * with NetHack's wait-for-key idle pattern. */
+    {
+        esp_pm_config_t pm = {
+            .max_freq_mhz = 240,
+            .min_freq_mhz = 40,
+            .light_sleep_enable = true,
+        };
+        esp_err_t err = esp_pm_configure(&pm);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_pm_configure: %s", esp_err_to_name(err));
+        }
+    }
 
     /* Quick environment dump so we can spot misconfigured PSRAM. */
     esp_chip_info_t info;

@@ -56,7 +56,7 @@ poll_task(void *arg)
                                            pdMS_TO_TICKS(20));
         if (err == ESP_OK && byte != 0x00) {
             int key = remap_key(byte);
-            ESP_LOGI(TAG, "key raw=0x%02x ('%c') -> 0x%02x ('%c')",
+            ESP_LOGD(TAG, "key raw=0x%02x ('%c') -> 0x%02x ('%c')",
                      byte, (byte >= 0x20 && byte < 0x7f) ? byte : '?',
                      key,  (key  >= 0x20 && key  < 0x7f) ? key  : '?');
             xQueueSend(s_queue, &key, 0);  /* drop on full */
@@ -70,6 +70,13 @@ esp_err_t
 tdeck_keyboard_init(void)
 {
     if (s_task) return ESP_OK;   /* already initialised */
+
+    /* Seed the activity timestamp so the idle backlight task doesn't
+     * dim immediately after boot just because no key has ever been
+     * pressed yet.  Without this, (now - 0) grows past DIM_AFTER_MS in
+     * 30 s of inactivity that would otherwise be the user reading the
+     * splash. */
+    s_last_key_tick = xTaskGetTickCount();
 
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = TDECK_KBD_I2C_PORT,

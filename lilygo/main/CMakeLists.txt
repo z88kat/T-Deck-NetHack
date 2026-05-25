@@ -21,4 +21,6 @@ idf_component_register(
         tdeck_keyboard
         # tdeck_sdcard mounts the microSD over the shared LCD SPI bus
         tdeck_sdcard
+        # esp_pm provides esp_pm_configure() for DFS + light sleep
+        esp_pm
 )

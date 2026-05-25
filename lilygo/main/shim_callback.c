@@ -1026,7 +1026,7 @@ nh_shim_callback(const char *name, void *ret_ptr, const char *fmt, ...)
                 break;
             }
         }
-        ESP_LOGI(TAG, "%s ret=%c (%s)", name, ret_code, summary);
+        ESP_LOGD(TAG, "%s ret=%c (%s)", name, ret_code, summary);
     }
 
     va_end(ap);

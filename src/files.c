@@ -513,6 +513,15 @@ free_nhfile(NHFILE *nhfp)
     }
 }
 
+#ifdef CROSS_TO_ESP32S3
+/* Atomic save state.  See the create_savefile comment below for the
+ * full design; declared up here so close_nhfile() / delete_savefile()
+ * can refer to them. */
+static char nh_savefile_tmp[BUFSZ];
+static char nh_savefile_final[BUFSZ];
+static boolean nh_savefile_atomic = FALSE;
+#endif
+
 void
 close_nhfile(NHFILE *nhfp)
 {
@@ -536,6 +545,23 @@ close_nhfile(NHFILE *nhfp)
         (void) nhclose(nhfp->fd), nhfp->fd = -1;
     else if (nhfp->fpdef)
         (void) fclose(nhfp->fpdef), nhfp->fpdef = (FILE *) 0;
+
+#ifdef CROSS_TO_ESP32S3
+    /* Final step of the atomic save: rename "<final>.tmp" -> "<final>".
+     * On FATFS this is a single directory-entry update, so either the
+     * old save (if any) survives intact or the new one fully replaces
+     * it.  Anything else (level files, bones, etc.) is closed normally;
+     * only the savefile gets the atomic treatment. */
+    if (nh_savefile_atomic
+        && nhfp->ftype == NHF_SAVEFILE
+        && nhfp->mode != READING) {
+        if (rename(nh_savefile_tmp, nh_savefile_final) != 0) {
+            /* If rename fails the .tmp remains; safety net will wipe it
+             * on the next boot's restore attempt. */
+        }
+        nh_savefile_atomic = FALSE;
+    }
+#endif
     if (nhfp->fplog)
         (void) fprintf(nhfp->fplog, "# closing\n");
     if (nhfp->fplog)
@@ -1164,6 +1190,13 @@ set_error_savefile(void)
 }
 #endif
 
+/* Atomic save: when create_savefile is called on the ESP build, the
+ * file is opened with a ".tmp" suffix.  close_nhfile() then renames the
+ * .tmp to the real name *after* the fsync().  If we lose power mid-write
+ * the .tmp file is partial but the previous full save (if any) is still
+ * intact -- and an orphan ".tmp" left behind is wiped at next boot by
+ * the save-corrupt safety net.  (State variables live above close_nhfile.) */
+
 /* create save file, overwriting one if it already exists */
 NHFILE *
 create_savefile(void)
@@ -1173,6 +1206,21 @@ create_savefile(void)
     boolean do_historical = TRUE;
 
     fq_save = fqname(gs.SAVEF, SAVEPREFIX, 0);
+#ifdef CROSS_TO_ESP32S3
+    /* Stash the final name and build "<final>.tmp" -- the actual open()
+     * happens against the .tmp path. */
+    {
+        size_t fl = strlen(fq_save);
+        if (fl + 5 < sizeof(nh_savefile_final)) {
+            Strcpy(nh_savefile_final, fq_save);
+            Sprintf(nh_savefile_tmp, "%s.tmp", fq_save);
+            fq_save = nh_savefile_tmp;
+            nh_savefile_atomic = TRUE;
+        } else {
+            nh_savefile_atomic = FALSE;
+        }
+    }
+#endif
     nhfp = new_nhfile();
     if (nhfp) {
         nhfp->ftype = NHF_SAVEFILE;
@@ -1272,6 +1320,13 @@ delete_savefile(void)
 
     (void) unlink(sfname);
     (void) delete_convertedfile(sfname);
+#ifdef CROSS_TO_ESP32S3
+    /* Clean up any half-written atomic-save artefact too. */
+    if (nh_savefile_atomic) {
+        (void) unlink(nh_savefile_tmp);
+        nh_savefile_atomic = FALSE;
+    }
+#endif
     return 0; /* for restore_saved_game() (ex-xxxmain.c) test */
 }
 
